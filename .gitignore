@@ -5,3 +5,5 @@ models
 .idea
 cityscapes/
 *.yaml
+dir/
+.DS_Store

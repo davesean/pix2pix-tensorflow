@@ -3,7 +3,7 @@ from __future__ import division
 from __future__ import print_function
 
 import sys
-sys.path.insert(0, '/Users/David/masterThesis/modular_semantic_segmentation')
+sys.path.insert(0, '../modular_semantic_segmentation')
 
 from experiments.utils import get_observer, load_data
 from experiments.evaluation import evaluate, import_weights_into_network
@@ -26,9 +26,12 @@ import random
 import collections
 import math
 import time
+import scipy
+import cv2
 from copy import deepcopy
+from sys import stdout
 
-Model = collections.namedtuple("Model", "outputs, predict_real, predict_fake, discrim_loss, discrim_grads_and_vars, gen_loss_GAN, gen_loss_L1, gen_grads_and_vars, train")
+Model = collections.namedtuple("Model", "inputs, targets, outputs, predict_real, predict_fake, discrim_loss, discrim_grads_and_vars, gen_loss_GAN, gen_loss_L1, gen_grads_and_vars,global_step, train")
 
 class Helper:
     name = 'A'
@@ -37,7 +40,7 @@ a = Helper()
 
 EPS = 1e-12
 CROP_SIZE = 256
-steps_per_epoch = 2975
+num_test_images = 20
 
 def create_directories(run_id, experiment):
     """
@@ -73,14 +76,18 @@ ex = sc.Experiment()
 ex.captured_out_filter = apply_backspaces_and_linefeeds
 ex.observers.append(get_observer())
 
+def add_noise(image):
+    with tf.name_scope("add_noise"):
+        return image+tf.random_normal(shape=tf.shape(image), mean=0.0, stddev=a.noise_std_dev, dtype=tf.float32)
+
 def preprocess(image):
     with tf.name_scope("preprocess"):
         # [0, 1] => [-1, 1]
-        return image * 2 - 1
+        return image/255 * 2 - 1
 def deprocess(image):
     with tf.name_scope("deprocess"):
         # [-1, 1] => [0, 1]
-        return (image + 1) / 2
+        return ((image + 1) / 2)*255
 def discrim_conv(batch_input, out_channels, stride):
     padded_input = tf.pad(batch_input, [[0, 0], [1, 1], [1, 1], [0, 0]], mode="CONSTANT")
     return tf.layers.conv2d(padded_input, out_channels, kernel_size=4, strides=(stride, stride), padding="valid", kernel_initializer=tf.random_normal_initializer(0, 0.02))
@@ -91,14 +98,12 @@ def gen_conv(batch_input, out_channels):
         return tf.layers.separable_conv2d(batch_input, out_channels, kernel_size=4, strides=(2, 2), padding="same", depthwise_initializer=initializer, pointwise_initializer=initializer)
     else:
         return tf.layers.conv2d(inputs=batch_input, filters=out_channels, kernel_size=4, strides=(2, 2), padding="same", kernel_initializer=initializer)
-def gen_deconv(batch_input, out_channels,input_size):
+def gen_deconv(batch_input, out_channels, image_size):
     # [batch, in_height, in_width, in_channels] => [batch, out_height, out_width, out_channels]
     initializer = tf.random_normal_initializer(0, 0.02)
     if a.separable_conv:
-        _b, h, w, _c = batch_input.shape
-        h=input_size
-        w=input_size
-        resized_input = tf.image.resize_images(batch_input, [h * 2, w * 2], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+        # _b, h, w, _c = batch_input.shape
+        resized_input = tf.image.resize_images(batch_input, [image_size, image_size], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
         return tf.layers.separable_conv2d(resized_input, out_channels, kernel_size=4, strides=(1, 1), padding="same", depthwise_initializer=initializer, pointwise_initializer=initializer)
     else:
         return tf.layers.conv2d_transpose(batch_input, out_channels, kernel_size=4, strides=(2, 2), padding="same", kernel_initializer=initializer)
@@ -119,7 +124,7 @@ def create_generator(generator_inputs, generator_outputs_channels):
 
     # encoder_1: [batch, 256, 256, in_channels] => [batch, 128, 128, ngf]
     with tf.variable_scope("encoder_1"):
-        output = gen_conv(generator_inputs, a.ngf)
+        output = gen_conv(add_noise(generator_inputs), a.ngf)
         layers.append(output)
 
     layer_specs = [
@@ -134,7 +139,7 @@ def create_generator(generator_inputs, generator_outputs_channels):
 
     for out_channels in layer_specs:
         with tf.variable_scope("encoder_%d" % (len(layers) + 1)):
-            rectified = lrelu(layers[-1], 0.2)
+            rectified = lrelu(add_noise(layers[-1]), 0.2)
             # [batch, in_height, in_width, in_channels] => [batch, in_height/2, in_width/2, out_channels]
             convolved = gen_conv(rectified, out_channels)
             output = batchnorm(convolved)
@@ -150,6 +155,17 @@ def create_generator(generator_inputs, generator_outputs_channels):
         (a.ngf, 0.0),       # decoder_2: [batch, 64, 64, ngf * 2 * 2] => [batch, 128, 128, ngf * 2]
     ]
 
+    images_sizes = [
+        int(a.input_image_size * 0.5**7),
+        int(a.input_image_size * 0.5**6),
+        int(a.input_image_size * 0.5**5),
+        int(a.input_image_size * 0.5**4),
+        int(a.input_image_size * 0.5**3),
+        int(a.input_image_size * 0.5**2),
+        int(a.input_image_size * 0.5),
+        int(a.input_image_size)
+    ]
+
     num_encoder_layers = len(layers)
     for decoder_layer, (out_channels, dropout) in enumerate(layer_specs):
         skip_layer = num_encoder_layers - decoder_layer - 1
@@ -157,14 +173,14 @@ def create_generator(generator_inputs, generator_outputs_channels):
             if decoder_layer == 0:
                 # first decoder layer doesn't have skip connections
                 # since it is directly connected to the skip_layer
-                input = layers[-1]
+                input = add_noise(layers[-1])
             else:
-                input = tf.concat([layers[-1], layers[skip_layer]], axis=3)
+                input = add_noise(tf.concat([layers[-1], layers[skip_layer]], axis=3))
 
             rectified = tf.nn.relu(input)
             # [batch, in_height, in_width, in_channels] => [batch, in_height*2, in_width*2, out_channels]
-            input_size = int(a.input_image_width/(2**8)*(2**(decoder_layer+1)))
-            output = gen_deconv(rectified, out_channels,input_size)
+            # input_size = int(a.input_image_size/(2**8)*(2**(decoder_layer+1)))
+            output = gen_deconv(rectified, out_channels,images_sizes[decoder_layer])
             output = batchnorm(output)
 
             if dropout > 0.0:
@@ -174,21 +190,22 @@ def create_generator(generator_inputs, generator_outputs_channels):
 
     # decoder_1: [batch, 128, 128, ngf * 2] => [batch, 256, 256, generator_outputs_channels]
     with tf.variable_scope("decoder_1"):
-        input = tf.concat([layers[-1], layers[0]], axis=3)
+        input = add_noise(tf.concat([layers[-1], layers[0]], axis=3))
         rectified = tf.nn.relu(input)
-        input_size = int(a.input_image_width/2)
-        output = gen_deconv(rectified, generator_outputs_channels,input_size)
+        # input_size = int(a.input_image_size/2)
+        output = gen_deconv(rectified, generator_outputs_channels,images_sizes[-1])
         output = tf.tanh(output)
         layers.append(output)
 
     return layers[-1]
-def create_model(inputs, targets):
+def create_model(inp, tar):
+    inputs = preprocess(inp)
+    targets = preprocess(tar)
     def create_discriminator(discrim_inputs, discrim_targets):
         n_layers = 3
         layers = []
 
         # 2x [batch, height, width, in_channels] => [batch, height, width, in_channels * 2]
-        discrim_targets = tf.cast(discrim_targets,tf.float32)
         input = tf.concat([discrim_inputs, discrim_targets], axis=3)
 
         # layer_1: [batch, 256, 256, in_channels * 2] => [batch, 128, 128, ndf]
@@ -219,6 +236,8 @@ def create_model(inputs, targets):
 
     with tf.variable_scope("generator"):
         out_channels = int(targets.get_shape()[-1])
+        # print(inputs.shape)
+        # inputs = tf.Print(inputs, [tf.shape(inputs)])
         outputs = create_generator(inputs, out_channels)
 
     # create two copies of discriminator, one for real pairs and one for fake pairs
@@ -237,13 +256,16 @@ def create_model(inputs, targets):
         # minimizing -tf.log will try to get inputs to 1
         # predict_real => 1
         # predict_fake => 0
-        discrim_loss = tf.reduce_mean(-(tf.log(predict_real + EPS) + tf.log(1 - predict_fake + EPS)))
+        # discrim_loss = tf.reduce_mean(-(tf.log(predict_real + EPS) + tf.log(1 - predict_fake + EPS)))
+        cond = tf.random_uniform(shape=[1],minval=0,maxval=1)
+        discrim_loss = tf.cond(cond[0] > a.label_flip,
+                               lambda: tf.reduce_mean(-(tf.log(predict_real + EPS) + tf.log(1 - predict_fake + EPS))),
+                               lambda: tf.reduce_mean(-(tf.log(predict_fake + EPS) + tf.log(1 - predict_real + EPS))))
 
     with tf.name_scope("generator_loss"):
         # predict_fake => 1
         # abs(targets - outputs) => 0
         gen_loss_GAN = tf.reduce_mean(-tf.log(predict_fake + EPS))
-        targets = tf.cast(targets,tf.float32)
         gen_loss_L1 = tf.reduce_mean(tf.abs(targets - outputs))
         gen_loss = gen_loss_GAN * a.gan_weight + gen_loss_L1 * a.l1_weight
 
@@ -267,6 +289,8 @@ def create_model(inputs, targets):
     incr_global_step = tf.assign(global_step, global_step+1)
 
     return Model(
+        inputs=inp,
+        targets=tar,
         predict_real=predict_real,
         predict_fake=predict_fake,
         discrim_loss=ema.average(discrim_loss),
@@ -274,18 +298,13 @@ def create_model(inputs, targets):
         gen_loss_GAN=ema.average(gen_loss_GAN),
         gen_loss_L1=ema.average(gen_loss_L1),
         gen_grads_and_vars=gen_grads_and_vars,
-        outputs=outputs,
+        outputs=deprocess(outputs),
         global_step=global_step,
         train=tf.group(update_losses, incr_global_step, gen_train),
     )
 
-
-
 @ex.main
 def main(dataset, net_config, _run):
-# def main(modelname, dataset, net_config, _run):
-    # Set up the directories for diagnostics
-
     for key in net_config:
         setattr(a, key, net_config[key])
 
@@ -299,21 +318,18 @@ def main(dataset, net_config, _run):
         key: [None, *description]
         for key, description in data_description[1].items()}]
 
-    input_data = data.get_trainset()
-    training_handle = tf.placeholder(tf.string, shape=[],
+    iter_handle = tf.placeholder(tf.string, shape=[],
                                           name='training_placeholder')
     iterator = tf.data.Iterator.from_string_handle(
-        training_handle, *data_description)
+        iter_handle, *data_description)
     training_batch = iterator.get_next()
 
-    # testing_handle = tf.placeholder(tf.string, shape=[],
-    #                                      name='testing_placeholder')
-    # iterator = tf.data.Iterator.from_string_handle(
-    #     testing_handle, *data_description)
-    # test_batch = iterator.get_next()
-    # evaluation_labels = test_batch['rgb']
-
     model = create_model(training_batch['labels'], training_batch['rgb'])
+
+    with tf.name_scope("encode_images"):
+        display_fetches = {
+            "outputs": model.outputs
+        }
 
     saver = tf.train.Saver()
 
@@ -325,85 +341,115 @@ def main(dataset, net_config, _run):
     # There are local variables in the metrics
     sess.run(tf.local_variables_initializer())
 
-    tf.summary.scalar("discriminator_loss", model.discrim_loss)
-    tf.summary.scalar("generator_loss_GAN", model.gen_loss_GAN)
-    tf.summary.scalar("generator_loss_L1", model.gen_loss_L1)
-
+    tf.summary.image("input",model.inputs[...,::-1])
+    tf.summary.image("output",model.outputs[...,::-1])
+    tf.summary.image("target",model.targets[...,::-1])
     merged_summary = tf.summary.merge_all()
 
     if output_dir is not None:
         train_writer = tf.summary.FileWriter(output_dir)
+        train_writer.add_graph(sess.graph)
 
-    train_iterator = input_data.batch(a.batch_size).make_one_shot_iterator()
-    train_handle = sess.run(train_iterator.string_handle())
+    if a.mode=="train":
+        print("INFO: Got train set")
+        input_data = data.get_trainset()
+        data_iterator = input_data.repeat(a.max_epochs).batch(a.batch_size).make_one_shot_iterator()
+        # data_iterator = input_data.batch(a.batch_size).make_initializable_iterator()
 
-    validation_iterator = input_data.take(10).batch(a.batch_size)\
-        .make_initializable_iterator()
+        validation_data = data.get_validation_set()
+        valid_iterator = validation_data.batch(a.batch_size).make_one_shot_iterator()
+        valid_handle = sess.run(valid_iterator.string_handle())
 
-    print('INFO: Start training')
-    # make sure this is getting printed out before the status bar
-    # stdout.flush()
+    else:
+        print("INFO: Got test set")
+        input_data = data.get_testset(num_items=num_test_images)
+        data_iterator = input_data.batch(a.batch_size).make_one_shot_iterator()
+
+    data_handle = sess.run(data_iterator.string_handle())
 
     if a.checkpoint is not None:
         print("loading model from checkpoint")
-        checkpoint = tf.train.latest_checkpoint(a.checkpoint)
+        checkpoint = tf.train.latest_checkpoint(os.path.join(EXP_OUT,str(a.checkpoint)))
         saver.restore(sess, checkpoint)
 
-    # max_steps = 2**32
-    # if a.max_epochs is not None:
-    #     max_steps = steps_per_epoch * a.max_epochs
-    # if a.max_steps is not None:
-    #     max_steps = a.max_steps
+    if a.mode=="test":
+        print("INFO: Starting Test")
+        for i in range(0,num_test_images):
+            results=sess.run(display_fetches, feed_dict={iter_handle: data_handle})
+            filename = "output" + str(i) + ".png"
+            cv2.imwrite(os.path.join(a.file_output_dir,filename), (results['outputs'][0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    else:
+        print('INFO: Start training')
+        # make sure this is getting printed out before the status bar
+        stdout.flush()
 
-    max_steps = 100
-    for k in range(1,a.max_epochs+1)
-    # for i in range(0,steps_per_epoch):
-    for i in range(0,max_steps):
+        start = time.time()
+        # for k in range(1,a.max_epochs+1):
+        for k in range(1,2):
+            i = 1
+            #sess.run(data_iterator.initializer)
+            while True:
+                fetches ={
+                    "train": model.train,
+                }
 
-        fetches ={
-            "train": model.train,
-        }
+                if i%a.num_print == 0 and i > 1:
+                    fetches["discrim_loss"] = model.discrim_loss
+                    fetches["gen_loss_GAN"] = model.gen_loss_GAN
+                    fetches["gen_loss_L1"] = model.gen_loss_L1
+                    fetches["outputs"] = model.outputs
+                    fetches["inputs"] = model.inputs
+                    fetches["targets"] = model.targets
+                try:
+                    sum, results=sess.run([merged_summary, fetches],
+                                  feed_dict={iter_handle: data_handle})
 
-        if i%10 is 0 and i > 0:
-            fetches["discrim_loss"] = model.discrim_loss
-            fetches["gen_loss_GAN"] = model.gen_loss_GAN
-            fetches["gen_loss_L1"] = model.gen_loss_L1
+                except tf.errors.OutOfRangeError:
+                    print("INFO: Training set has %d elements, starting next epoch" % i)
+                    break
 
+                if i%a.num_print == 0 and i > 1:
+                    rate = (i) / (time.time() - start)
+                    print ('Epoch %d\tStep %d: D_Loss: %f, \tG_Loss: %f, \tL1_Loss: %f, \tRate: %f img/sec, \tglobal_step: %d' % (k,i,results['discrim_loss'],results['gen_loss_GAN'],results['gen_loss_L1'],rate,tf.train.global_step(sess, model.global_step)))
+                    stdout.flush()
 
-        results=sess.run(fetches,
-                      feed_dict={training_handle: train_handle})
-        print(tf.train.global_step(sess, model.global_step))
+                    d_loss = tf.Summary(
+                        value=[tf.Summary.Value(tag='discriminator_loss',
+                                                simple_value=results['discrim_loss'])])
+                    g_loss = tf.Summary(
+                        value=[tf.Summary.Value(tag='generator_loss_GAN',
+                                                simple_value=results['gen_loss_GAN'])])
+                    l_loss = tf.Summary(
+                        value=[tf.Summary.Value(tag='generator_loss_L1',
+                                                simple_value=results['gen_loss_L1'])])
 
-        if i%10 is 0 and i > 0:
-            print ('Step %d: D_Loss: %f, \tG_Loss: %f, \tL1_Loss: %f' % (i,results['discrim_loss'],results['gen_loss_GAN'],results['gen_loss_L1']))
+                    train_writer.add_summary(d_loss, tf.train.global_step(sess, model.global_step))
+                    train_writer.add_summary(g_loss, tf.train.global_step(sess, model.global_step))
+                    train_writer.add_summary(l_loss, tf.train.global_step(sess, model.global_step))
+                    train_writer.add_summary(sum, tf.train.global_step(sess, model.global_step))
 
-            d_loss = tf.Summary(
-                value=[tf.Summary.Value(tag='discrim_loss',
-                                        simple_value=results['discrim_loss'])])
-            g_loss = tf.Summary(
-                value=[tf.Summary.Value(tag='gen_loss_GAN',
-                                        simple_value=results['gen_loss_GAN'])])
-            l_loss = tf.Summary(
-                value=[tf.Summary.Value(tag='gen_loss_L1',
-                                        simple_value=results['gen_loss_L1'])])
+                i=i+1
+            print("INFO: Saving model at: "+ output_dir)
+            saver.save(sess, os.path.join(output_dir, "model"))
 
-            train_writer.add_summary(d_loss, i)
-            train_writer.add_summary(g_loss, i)
-            train_writer.add_summary(l_loss, i)
+        print('INFO: Training finished.')
+        stdout.flush()
 
-
-    saver.save(sess, os.path.join(output_dir, "model"))
-
-
-
-
-
-
+        print('INFO: Starting Validation')
+        i=0
+        while True:
+            try:
+                results=sess.run(display_fetches,
+                              feed_dict={iter_handle: valid_handle})
+            except tf.errors.OutOfRangeError:
+                print("INFO: Finished validation of %d images after training" % i)
+                break
+            filename = str(_run._id) + "_validation" + str(i+1) + ".png"
+            cv2.imwrite(os.path.join(a.file_output_dir,filename), (results['outputs'][0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            i=i+1
 
     if output_dir is not None:
         train_writer.close()
-    print('INFO: Training finished.')
-    # stdout.flush()
 
 
 if __name__ == '__main__':
