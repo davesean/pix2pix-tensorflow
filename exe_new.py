@@ -39,7 +39,6 @@ class Helper:
 a = Helper()
 
 EPS = 1e-12
-CROP_SIZE = 256
 num_test_images = 20
 
 def create_directories(run_id, experiment):
