@@ -268,11 +268,14 @@ def create_model(inp, tar):
         gen_loss_L1 = tf.reduce_mean(tf.abs(targets - outputs))
         gen_loss = gen_loss_GAN * a.gan_weight + gen_loss_L1 * a.l1_weight
 
+    update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+
     with tf.name_scope("discriminator_train"):
-        discrim_tvars = [var for var in tf.trainable_variables() if var.name.startswith("discriminator")]
-        discrim_optim = tf.train.AdamOptimizer(a.lr, a.beta1)
-        discrim_grads_and_vars = discrim_optim.compute_gradients(discrim_loss, var_list=discrim_tvars)
-        discrim_train = discrim_optim.apply_gradients(discrim_grads_and_vars)
+        with tf.control_dependencies(update_ops):
+            discrim_tvars = [var for var in tf.trainable_variables() if var.name.startswith("discriminator")]
+            discrim_optim = tf.train.AdamOptimizer(a.lr, a.beta1)
+            discrim_grads_and_vars = discrim_optim.compute_gradients(discrim_loss, var_list=discrim_tvars)
+            discrim_train = discrim_optim.apply_gradients(discrim_grads_and_vars)
 
     with tf.name_scope("generator_train"):
         with tf.control_dependencies([discrim_train]):
@@ -327,6 +330,7 @@ def main(dataset, net_config, _run):
 
     with tf.name_scope("encode_images"):
         display_fetches = {
+            "targets": model.targets,
             "outputs": model.outputs
         }
 
@@ -445,6 +449,8 @@ def main(dataset, net_config, _run):
                 break
             filename = str(_run._id) + "_validation" + str(i+1) + ".png"
             cv2.imwrite(os.path.join(a.file_output_dir,filename), (results['outputs'][0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            filename = str(_run._id) + "_target" + str(i+1) + ".png"
+            cv2.imwrite(os.path.join(a.file_output_dir,filename), (results['targets'][0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
             i=i+1
 
     if output_dir is not None:
