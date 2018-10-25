@@ -301,6 +301,10 @@ def create_model(inp, tar):
     global_step = tf.train.get_or_create_global_step()
     incr_global_step = tf.assign(global_step, global_step+1)
 
+    update_flip_prob = tf.cond(global_step > a.flip_decay_step,
+                           lambda: tf.assign(a.flip_prob, a.flip_prob*a.flip_decay_rate),
+                           lambda: a.flip_prob)
+
     return Model(
         inputs=inp,
         targets=tar,
@@ -313,36 +317,42 @@ def create_model(inp, tar):
         gen_grads_and_vars=gen_grads_and_vars,
         outputs=deprocess(outputs),
         global_step=global_step,
-        train=tf.group(update_losses, incr_global_step, gen_train),
+        train=tf.group(update_losses, incr_global_step, gen_train, update_flip_prob),
     )
 
 @ex.main
 def main(dataset, net_config, _run):
+    # Add all of the config into the helper class
     for key in net_config:
         setattr(a, key, net_config[key])
 
     output_dir = create_directories(_run._id, ex)
-    # load the dataset class, but don't instantiate it
+    # load the dataset class
     data = get_dataset(dataset['name'])
     data = data(**dataset)
 
+    # Get the data descriptors with the shape of data coming
     data_description = data.get_data_description()
     data_description = [data_description[0], {
         key: [None, *description]
         for key, description in data_description[1].items()}]
 
+    # Create an iterator for the data
     iter_handle = tf.placeholder(tf.string, shape=[],
                                           name='training_placeholder')
     iterator = tf.data.Iterator.from_string_handle(
         iter_handle, *data_description)
     training_batch = iterator.get_next()
 
+    # Create a placeholder for if one is training and a Variable
+    # for the flipping probability
     a.is_train = tf.placeholder(tf.bool, name="is_train")
+    a.flip_prob = tf.Variable(a.flip_label_init_prob, name="flip_prob")
 
-    a.flip_prob = tf.placeholder(tf.float32,shape=None, name="flip_prob")
-
+    # Create pix2pix model
     model = create_model(training_batch['labels'], training_batch['rgb'])
 
+    # Define fetches for evaluation such that these are returned by the graph
     with tf.name_scope("encode_images"):
         if a.val_target_output == True:
             display_fetches = {
@@ -363,19 +373,20 @@ def main(dataset, net_config, _run):
     sess.run(tf.global_variables_initializer())
     # There are local variables in the metrics
     sess.run(tf.local_variables_initializer())
-
+    # Add the images to the summary
     tf.summary.image("input",model.inputs[...,::-1])
     tf.summary.image("output",model.outputs[...,::-1])
     tf.summary.image("target",model.targets[...,::-1])
-
+    # Add variable values to summary
     for var in tf.trainable_variables():
         tf.summary.histogram(var.op.name + "/values", var)
-
+    # Add gradients values to summary
     for grad, var in model.discrim_grads_and_vars + model.gen_grads_and_vars:
         tf.summary.histogram(var.op.name + "/gradients", grad)
-
+    # Merge all summaries to one instance
     merged_summary = tf.summary.merge_all()
 
+    # Start tensorflow summary filewriter
     if output_dir is not None:
         train_writer = tf.summary.FileWriter(output_dir)
         train_writer.add_graph(sess.graph)
@@ -389,7 +400,6 @@ def main(dataset, net_config, _run):
         validation_data = data.get_validation_set()
         valid_iterator = validation_data.batch(a.batch_size).make_one_shot_iterator()
         valid_handle = sess.run(valid_iterator.string_handle())
-
     else:
         print("INFO: Got test set")
         input_data = data.get_testset(num_items=num_test_images)
@@ -410,24 +420,15 @@ def main(dataset, net_config, _run):
             cv2.imwrite(os.path.join(a.file_output_dir,filename), (results['outputs'][0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
     else:
         print('INFO: Start training')
-        # make sure this is getting printed out before the status bar
         stdout.flush()
 
         start = time.time()
         # for k in range(1,a.max_epochs+1):
         for k in range(1,2):
             i = 1
-            flip = True
-            current_flip = a.label_flip
-            #sess.run(data_iterator.initializer)
             while True:
-                if flip and tf.train.global_step(sess, model.global_step) > a.flip_decay:
-                    temp = current_flip*a.decay_rate
-                    if temp < 0.01:
-                        flip = False
-                        current_flip = 0.0
-                    current_flip = temp
-
+                # Makes the graph run through the complete graph from beginning
+                # to end
                 fetches ={
                     "train": model.train,
                 }
@@ -445,8 +446,7 @@ def main(dataset, net_config, _run):
                     try:
                         sum, results=sess.run([merged_summary, fetches],
                                       feed_dict={iter_handle: data_handle,
-                                                 a.is_train: True,
-                                                 a.flip_prob: current_flip})
+                                                 a.is_train: True})
 
                     except tf.errors.OutOfRangeError:
                         print("INFO: Training set has %d elements, starting next epoch" % i)
@@ -489,8 +489,7 @@ def main(dataset, net_config, _run):
                     try:
                         results=sess.run(fetches,
                                       feed_dict={iter_handle: data_handle,
-                                                 a.is_train: True,
-                                                 a.flip_prob: current_flip})
+                                                 a.is_train: True})
 
                     except tf.errors.OutOfRangeError:
                         print("INFO: Training set has %d elements, starting next epoch" % (i-1))
@@ -514,8 +513,7 @@ def main(dataset, net_config, _run):
             try:
                 results, preds = sess.run([display_fetches, fetches],
                                         feed_dict={iter_handle: valid_handle,
-                                        a.is_train: False,
-                                        a.flip_prob: current_flip}) # Don't think it's needed here
+                                        a.is_train: False})
             except tf.errors.OutOfRangeError:
                 print("INFO: Finished validation of %d images after training" % i)
                 break
