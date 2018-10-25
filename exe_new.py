@@ -30,6 +30,7 @@ import scipy
 import cv2
 from copy import deepcopy
 from sys import stdout
+from skimage.measure import compare_ssim
 
 Model = collections.namedtuple("Model", "inputs, targets, outputs, predict_real, predict_fake, discrim_loss, discrim_grads_and_vars, gen_loss_GAN, gen_loss_L1, gen_grads_and_vars,global_step, train")
 
@@ -117,7 +118,8 @@ def lrelu(x, a):
         x = tf.identity(x)
         return (0.5 * (1 + a)) * x + (0.5 * (1 - a)) * tf.abs(x)
 def batchnorm(inputs):
-    return tf.layers.batch_normalization(inputs, axis=3, epsilon=1e-5, momentum=0.1, training=True, gamma_initializer=tf.random_normal_initializer(1.0, 0.02))
+    return tf.layers.batch_normalization(inputs, axis=3, epsilon=1e-5, momentum=0.1, training=a.is_train, gamma_initializer=tf.random_normal_initializer(1.0, 0.02))
+
 def create_generator(generator_inputs, generator_outputs_channels):
     layers = []
 
@@ -197,6 +199,7 @@ def create_generator(generator_inputs, generator_outputs_channels):
         layers.append(output)
 
     return layers[-1]
+
 def create_model(inp, tar):
     inputs = preprocess(inp)
     targets = preprocess(tar)
@@ -256,10 +259,17 @@ def create_model(inp, tar):
         # predict_real => 1
         # predict_fake => 0
         # discrim_loss = tf.reduce_mean(-(tf.log(predict_real + EPS) + tf.log(1 - predict_fake + EPS)))
+        if a.label_smoothing==True:
+            smoothing_fake = tf.random_uniform(shape=[1],minval=1,maxval=1.3)
+            smoothing_real = tf.random_uniform(shape=[1],minval=0.0,maxval=0.2)
+        else:
+            smoothing_fake = 1
+            smoothing_real = 0
+
         cond = tf.random_uniform(shape=[1],minval=0,maxval=1)
-        discrim_loss = tf.cond(cond[0] > a.label_flip,
-                               lambda: tf.reduce_mean(-(tf.log(predict_real + EPS) + tf.log(1 - predict_fake + EPS))),
-                               lambda: tf.reduce_mean(-(tf.log(predict_fake + EPS) + tf.log(1 - predict_real + EPS))))
+        discrim_loss = tf.cond(cond[0] > a.flip_prob,
+                               lambda: tf.reduce_mean(-(tf.log(smoothing_real + predict_real + EPS) + tf.log(smoothing_fake - predict_fake + EPS))),
+                               lambda: tf.reduce_mean(-(tf.log(smoothing_real + predict_fake + EPS) + tf.log(smoothing_fake - predict_real + EPS))))
 
     with tf.name_scope("generator_loss"):
         # predict_fake => 1
@@ -283,6 +293,7 @@ def create_model(inp, tar):
             gen_optim = tf.train.AdamOptimizer(a.lr, a.beta1)
             gen_grads_and_vars = gen_optim.compute_gradients(gen_loss, var_list=gen_tvars)
             gen_train = gen_optim.apply_gradients(gen_grads_and_vars)
+
 
     ema = tf.train.ExponentialMovingAverage(decay=0.99)
     update_losses = ema.apply([discrim_loss, gen_loss_GAN, gen_loss_L1])
@@ -326,13 +337,22 @@ def main(dataset, net_config, _run):
         iter_handle, *data_description)
     training_batch = iterator.get_next()
 
+    a.is_train = tf.placeholder(tf.bool, name="is_train")
+
+    a.flip_prob = tf.placeholder(tf.float32,shape=None, name="flip_prob")
+
     model = create_model(training_batch['labels'], training_batch['rgb'])
 
     with tf.name_scope("encode_images"):
-        display_fetches = {
-            "targets": model.targets,
-            "outputs": model.outputs
-        }
+        if a.val_target_output == True:
+            display_fetches = {
+                "targets": model.targets,
+                "outputs": model.outputs
+            }
+        else:
+            display_fetches = {
+                "outputs": model.outputs
+            }
 
     saver = tf.train.Saver()
 
@@ -347,6 +367,13 @@ def main(dataset, net_config, _run):
     tf.summary.image("input",model.inputs[...,::-1])
     tf.summary.image("output",model.outputs[...,::-1])
     tf.summary.image("target",model.targets[...,::-1])
+
+    for var in tf.trainable_variables():
+        tf.summary.histogram(var.op.name + "/values", var)
+
+    for grad, var in model.discrim_grads_and_vars + model.gen_grads_and_vars:
+        tf.summary.histogram(var.op.name + "/gradients", grad)
+
     merged_summary = tf.summary.merge_all()
 
     if output_dir is not None:
@@ -390,30 +417,45 @@ def main(dataset, net_config, _run):
         # for k in range(1,a.max_epochs+1):
         for k in range(1,2):
             i = 1
+            flip = True
+            current_flip = a.label_flip
             #sess.run(data_iterator.initializer)
             while True:
+                if flip and tf.train.global_step(sess, model.global_step) > a.flip_decay:
+                    temp = current_flip*a.decay_rate
+                    if temp < 0.01:
+                        flip = False
+                        current_flip = 0.0
+                    current_flip = temp
+
                 fetches ={
                     "train": model.train,
                 }
 
-                if i%a.num_print == 0 and i > 1:
+                if i%a.num_print == 0:
                     fetches["discrim_loss"] = model.discrim_loss
                     fetches["gen_loss_GAN"] = model.gen_loss_GAN
                     fetches["gen_loss_L1"] = model.gen_loss_L1
                     fetches["outputs"] = model.outputs
                     fetches["inputs"] = model.inputs
                     fetches["targets"] = model.targets
-                try:
-                    sum, results=sess.run([merged_summary, fetches],
-                                  feed_dict={iter_handle: data_handle})
+                    fetches["predict_fake"] = model.predict_fake
+                    fetches["predict_real"] = model.predict_real
 
-                except tf.errors.OutOfRangeError:
-                    print("INFO: Training set has %d elements, starting next epoch" % i)
-                    break
+                    try:
+                        sum, results=sess.run([merged_summary, fetches],
+                                      feed_dict={iter_handle: data_handle,
+                                                 a.is_train: True,
+                                                 a.flip_prob: current_flip})
 
-                if i%a.num_print == 0 and i > 1:
+                    except tf.errors.OutOfRangeError:
+                        print("INFO: Training set has %d elements, starting next epoch" % i)
+                        break
+
                     rate = (i) / (time.time() - start)
-                    print ('Epoch %d\tStep %d: D_Loss: %f, \tG_Loss: %f, \tL1_Loss: %f, \tRate: %f img/sec, \tglobal_step: %d' % (k,i,results['discrim_loss'],results['gen_loss_GAN'],results['gen_loss_L1'],rate,tf.train.global_step(sess, model.global_step)))
+                    ssim_score = compare_ssim(cv2.cvtColor(results["targets"][0,:,:,:], cv2.COLOR_BGR2GRAY),cv2.cvtColor(results["outputs"][0,:,:,:], cv2.COLOR_BGR2GRAY), data_range=255)
+
+                    print ('Epoch %d\tStep %d: D_Loss: %f, \tG_Loss: %f, \tL1_Loss: %f, \tSSIM_Score: %f, \tRate: %f img/sec, \tglobal_step: %d' % (k,i,results['discrim_loss'],results['gen_loss_GAN'],results['gen_loss_L1'],ssim_score,rate,tf.train.global_step(sess, model.global_step)))
                     stdout.flush()
 
                     d_loss = tf.Summary(
@@ -425,11 +467,34 @@ def main(dataset, net_config, _run):
                     l_loss = tf.Summary(
                         value=[tf.Summary.Value(tag='generator_loss_L1',
                                                 simple_value=results['gen_loss_L1'])])
+                    ssim = tf.Summary(
+                        value=[tf.Summary.Value(tag='SSIM_score',
+                                                simple_value=ssim_score)])
+                    p_fake = tf.Summary(
+                        value=[tf.Summary.Value(tag='predict_fake_values',
+                                                simple_value=np.mean(results['predict_fake']))])
+                    p_real = tf.Summary(
+                        value=[tf.Summary.Value(tag='predict_real_values',
+                                                simple_value=np.mean(results['predict_real']))])
 
                     train_writer.add_summary(d_loss, tf.train.global_step(sess, model.global_step))
                     train_writer.add_summary(g_loss, tf.train.global_step(sess, model.global_step))
                     train_writer.add_summary(l_loss, tf.train.global_step(sess, model.global_step))
+                    train_writer.add_summary(ssim, tf.train.global_step(sess, model.global_step))
+                    train_writer.add_summary(p_fake, tf.train.global_step(sess, model.global_step))
+                    train_writer.add_summary(p_real, tf.train.global_step(sess, model.global_step))
                     train_writer.add_summary(sum, tf.train.global_step(sess, model.global_step))
+
+                else:
+                    try:
+                        results=sess.run(fetches,
+                                      feed_dict={iter_handle: data_handle,
+                                                 a.is_train: True,
+                                                 a.flip_prob: current_flip})
+
+                    except tf.errors.OutOfRangeError:
+                        print("INFO: Training set has %d elements, starting next epoch" % (i-1))
+                        break
 
                 i=i+1
             print("INFO: Saving model at: "+ output_dir)
@@ -440,19 +505,29 @@ def main(dataset, net_config, _run):
 
         print('INFO: Starting Validation')
         i=0
+        predict_values = np.zeros(15)
         while True:
+            fetches ={
+                "predict_fake": model.predict_fake
+            }
+
             try:
-                results=sess.run(display_fetches,
-                              feed_dict={iter_handle: valid_handle})
+                results, preds = sess.run([display_fetches, fetches],
+                                        feed_dict={iter_handle: valid_handle,
+                                        a.is_train: False,
+                                        a.flip_prob: current_flip}) # Don't think it's needed here
             except tf.errors.OutOfRangeError:
                 print("INFO: Finished validation of %d images after training" % i)
                 break
+            predict_values[i] = (np.mean(preds['predict_fake']))
             filename = str(_run._id) + "_validation" + str(i+1) + ".png"
             cv2.imwrite(os.path.join(a.file_output_dir,filename), (results['outputs'][0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            filename = str(_run._id) + "_target" + str(i+1) + ".png"
-            cv2.imwrite(os.path.join(a.file_output_dir,filename), (results['targets'][0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            if a.val_target_output == True:
+                filename = str(_run._id) + "_target" + str(i+1) + ".png"
+                cv2.imwrite(os.path.join(a.file_output_dir,filename), (results['targets'][0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
             i=i+1
 
+        _run.info['predictions'] = predict_values
     if output_dir is not None:
         train_writer.close()
 
