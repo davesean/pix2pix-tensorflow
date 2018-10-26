@@ -267,7 +267,7 @@ def create_model(inp, tar):
             smoothing_real = 0
 
         cond = tf.random_uniform(shape=[1],minval=0,maxval=1)
-        discrim_loss = tf.cond(cond[0] > a.flip_prob,
+        discrim_loss = tf.cond(cond[0] > (a.flip_prob+a.flip_end_prob),
                                lambda: tf.reduce_mean(-(tf.log(smoothing_real + predict_real + EPS) + tf.log(smoothing_fake - predict_fake + EPS))),
                                lambda: tf.reduce_mean(-(tf.log(smoothing_real + predict_fake + EPS) + tf.log(smoothing_fake - predict_real + EPS))))
 
@@ -302,7 +302,7 @@ def create_model(inp, tar):
     incr_global_step = tf.assign(global_step, global_step+1)
 
     update_flip_prob = tf.cond(global_step > a.flip_decay_step,
-                           lambda: tf.assign(a.flip_prob, a.flip_prob*a.flip_decay_rate),
+                           lambda: tf.assign(a.flip_prob, a.flip_prob*a.decay_term),
                            lambda: a.flip_prob)
 
     return Model(
@@ -347,7 +347,9 @@ def main(dataset, net_config, _run):
     # Create a placeholder for if one is training and a Variable
     # for the flipping probability
     a.is_train = tf.placeholder(tf.bool, name="is_train")
-    a.flip_prob = tf.Variable(a.flip_label_init_prob, name="flip_prob")
+    a.decay_term = np.exp(-a.flip_lambda) # x = e^-lambda where N(t)=N(0)*x^t
+    a.flip_prob = tf.Variable(a.flip_label_init_prob*a.flip_decay_perc, name="flip_prob")
+    a.flip_end_prob = a.flip_label_init_prob*(1-a.flip_decay_perc)
 
     # Create pix2pix model
     model = create_model(training_batch['labels'], training_batch['rgb'])
