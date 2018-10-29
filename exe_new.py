@@ -506,10 +506,12 @@ def main(dataset, net_config, _run):
 
         print('INFO: Starting Validation')
         i=0
-        predict_values = np.zeros(15)
+        fake_values = np.zeros(15)
+        real_values = np.zeros(15)
         while True:
             fetches ={
-                "predict_fake": model.predict_fake
+                "predict_fake": model.predict_fake,
+                "predict_real": model.predict_real
             }
 
             try:
@@ -519,7 +521,8 @@ def main(dataset, net_config, _run):
             except tf.errors.OutOfRangeError:
                 print("INFO: Finished validation of %d images after training" % i)
                 break
-            predict_values[i] = (np.mean(preds['predict_fake']))
+            fake_values[i] = (np.mean(preds['predict_fake']))
+            real_values[i] = (np.mean(preds['predict_real']))
             filename = str(_run._id) + "_validation" + str(i+1) + ".png"
             cv2.imwrite(os.path.join(a.file_output_dir,filename), (results['outputs'][0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
             if a.val_target_output == True:
@@ -527,7 +530,8 @@ def main(dataset, net_config, _run):
                 cv2.imwrite(os.path.join(a.file_output_dir,filename), (results['targets'][0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
             i=i+1
 
-        _run.info['predictions'] = predict_values
+        _run.info['predictions_fake'] = fake_values
+        _run.info['predictions_real'] = real_values
     if output_dir is not None:
         train_writer.close()
 
