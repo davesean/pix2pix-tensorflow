@@ -118,7 +118,7 @@ def lrelu(x, a):
         x = tf.identity(x)
         return (0.5 * (1 + a)) * x + (0.5 * (1 - a)) * tf.abs(x)
 def batchnorm(inputs):
-    return tf.layers.batch_normalization(inputs, axis=3, epsilon=1e-5, momentum=0.1, training=a.is_train, gamma_initializer=tf.random_normal_initializer(1.0, 0.02))
+    return tf.layers.batch_normalization(inputs, axis=3, epsilon=1e-5, momentum=0.9, training=a.is_train, gamma_initializer=tf.random_normal_initializer(1.0, 0.02))
 
 def create_generator(generator_inputs, generator_outputs_channels):
     layers = []
