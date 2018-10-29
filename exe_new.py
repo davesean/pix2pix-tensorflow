@@ -180,7 +180,6 @@ def create_generator(generator_inputs, generator_outputs_channels):
 
             rectified = tf.nn.relu(input)
             # [batch, in_height, in_width, in_channels] => [batch, in_height*2, in_width*2, out_channels]
-            # input_size = int(a.input_image_size/(2**8)*(2**(decoder_layer+1)))
             output = gen_deconv(rectified, out_channels,images_sizes[decoder_layer])
             output = batchnorm(output)
 
@@ -193,7 +192,6 @@ def create_generator(generator_inputs, generator_outputs_channels):
     with tf.variable_scope("decoder_1"):
         input = add_noise(tf.concat([layers[-1], layers[0]], axis=3))
         rectified = tf.nn.relu(input)
-        # input_size = int(a.input_image_size/2)
         output = gen_deconv(rectified, generator_outputs_channels,images_sizes[-1])
         output = tf.tanh(output)
         layers.append(output)
@@ -238,8 +236,6 @@ def create_model(inp, tar):
 
     with tf.variable_scope("generator"):
         out_channels = int(targets.get_shape()[-1])
-        # print(inputs.shape)
-        # inputs = tf.Print(inputs, [tf.shape(inputs)])
         outputs = create_generator(inputs, out_channels)
 
     # create two copies of discriminator, one for real pairs and one for fake pairs
