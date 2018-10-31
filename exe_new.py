@@ -31,6 +31,7 @@ import cv2
 from copy import deepcopy
 from sys import stdout
 from skimage.measure import compare_ssim
+from model import pix2pix
 
 Model = collections.namedtuple("Model", "inputs, targets, outputs, predict_real, predict_fake, discrim_loss, discrim_grads_and_vars, gen_loss_GAN, gen_loss_L1, gen_grads_and_vars,global_step, train")
 
@@ -340,54 +341,9 @@ def main(dataset, net_config, _run):
         iter_handle, *data_description)
     training_batch = iterator.get_next()
 
-    # Create a placeholder for if one is training and a Variable
-    # for the flipping probability
-    a.is_train = tf.placeholder(tf.bool, name="is_train")
-    a.decay_term = np.exp(-a.flip_lambda) # x = e^-lambda where N(t)=N(0)*x^t
-    a.flip_prob = tf.Variable(a.flip_label_init_prob*a.flip_decay_perc, name="flip_prob")
-    a.flip_end_prob = a.flip_label_init_prob*(1-a.flip_decay_perc)
-
     # Create pix2pix model
     model = create_model(training_batch['labels'], training_batch['rgb'])
 
-    # Define fetches for evaluation such that these are returned by the graph
-    with tf.name_scope("encode_images"):
-        if a.val_target_output == True:
-            display_fetches = {
-                "targets": model.targets,
-                "outputs": model.outputs
-            }
-        else:
-            display_fetches = {
-                "outputs": model.outputs
-            }
-
-    saver = tf.train.Saver()
-
-    # Limit GPU fraction
-    gpu_options = tf.GPUOptions(
-        per_process_gpu_memory_fraction=0.9)
-    sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
-    sess.run(tf.global_variables_initializer())
-    # There are local variables in the metrics
-    sess.run(tf.local_variables_initializer())
-    # Add the images to the summary
-    tf.summary.image("input",model.inputs[...,::-1])
-    tf.summary.image("output",model.outputs[...,::-1])
-    tf.summary.image("target",model.targets[...,::-1])
-    # Add variable values to summary
-    for var in tf.trainable_variables():
-        tf.summary.histogram(var.op.name + "/values", var)
-    # Add gradients values to summary
-    for grad, var in model.discrim_grads_and_vars + model.gen_grads_and_vars:
-        tf.summary.histogram(var.op.name + "/gradients", grad)
-    # Merge all summaries to one instance
-    merged_summary = tf.summary.merge_all()
-
-    # Start tensorflow summary filewriter
-    if output_dir is not None:
-        train_writer = tf.summary.FileWriter(output_dir)
-        train_writer.add_graph(sess.graph)
 
     if a.mode=="train":
         print("INFO: Got train set")
@@ -410,126 +366,18 @@ def main(dataset, net_config, _run):
         checkpoint = tf.train.latest_checkpoint(os.path.join(EXP_OUT,str(a.checkpoint)))
         saver.restore(sess, checkpoint)
 
-    if a.mode=="test":
-        print("INFO: Starting Test")
-        for i in range(0,num_test_images):
-            results=sess.run(display_fetches, feed_dict={iter_handle: data_handle})
-            filename = "output" + str(i) + ".png"
-            cv2.imwrite(os.path.join(a.file_output_dir,filename), (results['outputs'][0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-    else:
-        print('INFO: Start training')
-        stdout.flush()
+    with tf.Session() as sess:
+        model = pix2pix(sess, image_size=args.fine_size, batch_size=args.batch_size,
+                        output_size=args.fine_size, dataset_name=args.dataset_name,
+                        checkpoint_dir=args.checkpoint_dir, sample_dir=args.sample_dir)
 
-        start = time.time()
-        # for k in range(1,a.max_epochs+1):
-        for k in range(1,2):
-            i = 1
-            while True:
-                # Makes the graph run through the complete graph from beginning
-                # to end
-                fetches ={
-                    "train": model.train,
-                }
+        if args.phase == 'train':
+            model.train(args)
+        else:
+            model.test(args)
 
-                if i%a.num_print == 0:
-                    fetches["discrim_loss"] = model.discrim_loss
-                    fetches["gen_loss_GAN"] = model.gen_loss_GAN
-                    fetches["gen_loss_L1"] = model.gen_loss_L1
-                    fetches["outputs"] = model.outputs
-                    fetches["inputs"] = model.inputs
-                    fetches["targets"] = model.targets
-                    fetches["predict_fake"] = model.predict_fake
-                    fetches["predict_real"] = model.predict_real
 
-                    try:
-                        sum, results=sess.run([merged_summary, fetches],
-                                      feed_dict={iter_handle: data_handle,
-                                                 a.is_train: True})
 
-                    except tf.errors.OutOfRangeError:
-                        print("INFO: Training set has %d elements, starting next epoch" % i)
-                        break
-
-                    rate = (i) / (time.time() - start)
-                    ssim_score = compare_ssim(cv2.cvtColor(results["targets"][0,:,:,:], cv2.COLOR_BGR2GRAY),cv2.cvtColor(results["outputs"][0,:,:,:], cv2.COLOR_BGR2GRAY), data_range=255)
-
-                    print ('Epoch %d\tStep %d: D_Loss: %f, \tG_Loss: %f, \tL1_Loss: %f, \tSSIM_Score: %f, \tRate: %f img/sec, \tglobal_step: %d' % (k,i,results['discrim_loss'],results['gen_loss_GAN'],results['gen_loss_L1'],ssim_score,rate,tf.train.global_step(sess, model.global_step)))
-                    stdout.flush()
-
-                    d_loss = tf.Summary(
-                        value=[tf.Summary.Value(tag='discriminator_loss',
-                                                simple_value=results['discrim_loss'])])
-                    g_loss = tf.Summary(
-                        value=[tf.Summary.Value(tag='generator_loss_GAN',
-                                                simple_value=results['gen_loss_GAN'])])
-                    l_loss = tf.Summary(
-                        value=[tf.Summary.Value(tag='generator_loss_L1',
-                                                simple_value=results['gen_loss_L1'])])
-                    ssim = tf.Summary(
-                        value=[tf.Summary.Value(tag='SSIM_score',
-                                                simple_value=ssim_score)])
-                    p_fake = tf.Summary(
-                        value=[tf.Summary.Value(tag='predict_fake_values',
-                                                simple_value=np.mean(results['predict_fake']))])
-                    p_real = tf.Summary(
-                        value=[tf.Summary.Value(tag='predict_real_values',
-                                                simple_value=np.mean(results['predict_real']))])
-
-                    train_writer.add_summary(d_loss, tf.train.global_step(sess, model.global_step))
-                    train_writer.add_summary(g_loss, tf.train.global_step(sess, model.global_step))
-                    train_writer.add_summary(l_loss, tf.train.global_step(sess, model.global_step))
-                    train_writer.add_summary(ssim, tf.train.global_step(sess, model.global_step))
-                    train_writer.add_summary(p_fake, tf.train.global_step(sess, model.global_step))
-                    train_writer.add_summary(p_real, tf.train.global_step(sess, model.global_step))
-                    train_writer.add_summary(sum, tf.train.global_step(sess, model.global_step))
-
-                else:
-                    try:
-                        results=sess.run(fetches,
-                                      feed_dict={iter_handle: data_handle,
-                                                 a.is_train: True})
-
-                    except tf.errors.OutOfRangeError:
-                        print("INFO: Training set has %d elements, starting next epoch" % (i-1))
-                        break
-
-                i=i+1
-            print("INFO: Saving model at: "+ output_dir)
-            saver.save(sess, os.path.join(output_dir, "model"))
-
-        print('INFO: Training finished.')
-        stdout.flush()
-
-        print('INFO: Starting Validation')
-        i=0
-        fake_values = np.zeros(15)
-        real_values = np.zeros(15)
-        while True:
-            fetches ={
-                "predict_fake": model.predict_fake,
-                "predict_real": model.predict_real
-            }
-
-            try:
-                results, preds = sess.run([display_fetches, fetches],
-                                        feed_dict={iter_handle: valid_handle,
-                                        a.is_train: False})
-            except tf.errors.OutOfRangeError:
-                print("INFO: Finished validation of %d images after training" % i)
-                break
-            fake_values[i] = (np.mean(preds['predict_fake']))
-            real_values[i] = (np.mean(preds['predict_real']))
-            filename = str(_run._id) + "_validation" + str(i+1) + ".png"
-            cv2.imwrite(os.path.join(a.file_output_dir,filename), (results['outputs'][0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            if a.val_target_output == True:
-                filename = str(_run._id) + "_target" + str(i+1) + ".png"
-                cv2.imwrite(os.path.join(a.file_output_dir,filename), (results['targets'][0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            i=i+1
-
-        _run.info['predictions_fake'] = fake_values
-        _run.info['predictions_real'] = real_values
-    if output_dir is not None:
-        train_writer.close()
 
 
 if __name__ == '__main__':
