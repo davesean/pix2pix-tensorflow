@@ -163,18 +163,24 @@ class pix2pix(object):
 
                 # Update D network
                 try:
-                    _, summary_str = self.sess.run([d_optim, self.d_sum],
-                                                   feed_dict={ self.iter_handle: data_handle })
-                    self.writer.add_summary(summary_str, counter)
+                    if np.mod(counter, 200) == 1:
+                        _, summary_str = self.sess.run([d_optim, self.d_sum],
+                                                       feed_dict={ self.iter_handle: data_handle })
+                        self.writer.add_summary(summary_str, counter)
+                    else:
+                        self.sess.run(d_optim,feed_dict={ self.iter_handle: data_handle })
                 except tf.errors.OutOfRangeError:
                     print("INFO: Training set has %d elements, starting next epoch" % counter-1)
                     break
 
                 # Update G network
                 try:
-                    _, summary_str = self.sess.run([g_optim, self.g_sum],
-                                                   feed_dict={ self.iter_handle: data_handle })
-                    self.writer.add_summary(summary_str, counter)
+                    if np.mod(counter, 200) == 1:
+                        _, summary_str = self.sess.run([g_optim, self.g_sum],
+                                                       feed_dict={ self.iter_handle: data_handle })
+                        self.writer.add_summary(summary_str, counter)
+                    else:
+                        self.sess.run(g_optim,feed_dict={ self.iter_handle: data_handle })
                 except tf.errors.OutOfRangeError:
                     print("INFO: Training set has %d elements, starting next epoch" % counter-1)
                     break
@@ -187,30 +193,30 @@ class pix2pix(object):
                 # except tf.errors.OutOfRangeError:
                 #     print("INFO: Training set has %d elements, starting next epoch" % counter-1)
                 #     break
-                try:
-                    errD_fake = self.d_loss_fake.eval({self.iter_handle: data_handle})
-                except tf.errors.OutOfRangeError:
-                    print("INFO: Training set has %d elements, starting next epoch" % counter-1)
-                    break
-                try:
-                    errD_real = self.d_loss_real.eval({self.iter_handle: data_handle})
-                except tf.errors.OutOfRangeError:
-                    print("INFO: Training set has %d elements, starting next epoch" % counter-1)
-                    break
-                try:
-                    errG = self.g_loss.eval({self.iter_handle: data_handle})
-                except tf.errors.OutOfRangeError:
-                    print("INFO: Training set has %d elements, starting next epoch" % counter-1)
-                    break
+                # try:
+                #     errD_fake = self.d_loss_fake.eval({self.iter_handle: data_handle})
+                # except tf.errors.OutOfRangeError:
+                #     print("INFO: Training set has %d elements, starting next epoch" % counter-1)
+                #     break
+                # try:
+                #     errD_real = self.d_loss_real.eval({self.iter_handle: data_handle})
+                # except tf.errors.OutOfRangeError:
+                #     print("INFO: Training set has %d elements, starting next epoch" % counter-1)
+                #     break
+                # try:
+                #     errG = self.g_loss.eval({self.iter_handle: data_handle})
+                # except tf.errors.OutOfRangeError:
+                #     print("INFO: Training set has %d elements, starting next epoch" % counter-1)
+                #     break
 
                 counter += 1
-                print("Step: [%2d] time: %4.4f, d_loss: %.8f, g_loss: %.8f" \
-                    % (counter,time.time() - start_time, errD_fake+errD_real, errG))
+                # print("Step: [%2d] time: %4.4f, d_loss: %.8f, g_loss: %.8f" \
+                #     % (counter,time.time() - start_time, errD_fake+errD_real, errG))
 
                 # if np.mod(counter, 100) == 1:
                 #     self.sample_model(args.sample_dir, epoch, idx)
 
-                if np.mod(counter, 500) == 2:
+                if np.mod(counter, 2500) == 2:
                     self.save(self.checkpoint_dir, counter)
 
     def discriminator(self, image, y=None, reuse=False):
