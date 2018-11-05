@@ -40,12 +40,16 @@ def conv_cond_concat(x, y):
     return tf.concat([x, y*tf.ones([x_shapes[0], x_shapes[1], x_shapes[2], y_shapes[3]])], 3)
 
 def conv2d(input_, output_dim,
-           k_h=5, k_w=5, d_h=2, d_w=2, stddev=0.02,
-           name="conv2d"):
+           k_h=4, k_w=4, d_h=2, d_w=2, stddev=0.02,
+           name="conv2d",pad="SAME"):
     with tf.variable_scope(name):
         w = tf.get_variable('w', [k_h, k_w, input_.get_shape()[-1], output_dim],
                             initializer=tf.truncated_normal_initializer(stddev=stddev))
-        conv = tf.nn.conv2d(input_, w, strides=[1, d_h, d_w, 1], padding='SAME')
+        if pad=="VALID":
+            conv = tf.pad(input_, [[0,0],[1,1],[1,1],[0,0]], mode="CONSTANT")
+            conv = tf.nn.conv2d(conv, w, strides=[1, d_h, d_w, 1], padding=pad)
+        else:
+            conv = tf.nn.conv2d(input_, w, strides=[1, d_h, d_w, 1], padding=pad)
 
         biases = tf.get_variable('biases', [output_dim], initializer=tf.constant_initializer(0.0))
         conv = tf.reshape(tf.nn.bias_add(conv, biases), tf.shape(conv))
@@ -83,7 +87,7 @@ def lrelu(x, leak=0.2, name="lrelu"):
 
 def linear(input_, output_size, scope=None, stddev=0.02, bias_start=0.0, with_w=False):
     # shape = input_.get_shape().as_list()
-    shape = 16 * 16 * 64 * 8 * 4
+    shape = 31 * 31 * 64 * 8
     with tf.variable_scope(scope or "Linear"):
         matrix = tf.get_variable("Matrix", [shape, output_size], tf.float32,
                                  tf.random_normal_initializer(stddev=stddev))

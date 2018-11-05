@@ -83,10 +83,13 @@ def main(dataset, net_config, _run):
     for key in net_config:
         setattr(a, key, net_config[key])
 
-    output_dir = create_directories(_run._id, ex)
-    # load the dataset class
+    setattr(a,'EXP_OUT',EXP_OUT)
 
-    with tf.Session() as sess:
+    output_dir = create_directories(_run._id, ex)
+    
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.9)
+    with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+        # load the dataset class
         data = get_dataset(dataset['name'])
         data = data(**dataset)
         model = pix2pix(sess, image_size=a.input_image_size, batch_size=a.batch_size,
@@ -96,6 +99,8 @@ def main(dataset, net_config, _run):
 
         if a.mode == 'train':
             model.train(a)
+        elif a.mode == 'valid':
+            _run.info['predictions'] = model.validate(a)
         else:
             model.test(a)
 

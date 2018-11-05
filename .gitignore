@@ -7,3 +7,4 @@ cityscapes/
 *.yaml
 dir/
 .DS_Store
+whodis*

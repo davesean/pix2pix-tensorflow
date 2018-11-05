@@ -1,9 +1,11 @@
 from __future__ import division
 import os
 import time
+from sys import stdout
 from glob import glob
 import tensorflow as tf
 import numpy as np
+import cv2
 from six.moves import xrange
 
 from ops import *
@@ -100,7 +102,7 @@ class pix2pix(object):
         self.D, self.D_logits = self.discriminator(self.real_AB, reuse=False)
         self.D_, self.D_logits_ = self.discriminator(self.fake_AB, reuse=True)
 
-        # self.fake_B_sample = self.sampler(self.real_A)
+        self.fake_B_sample = self.sampler(self.real_A)
 
         self.d_loss_real = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_logits, labels=tf.ones_like(self.D)))
         self.d_loss_fake = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_logits_, labels=tf.zeros_like(self.D_)))
@@ -109,11 +111,11 @@ class pix2pix(object):
 
         self.d_loss = self.d_loss_real + self.d_loss_fake
 
-
         self.d_sum = tf.summary.histogram("d", self.D)
         self.d__sum = tf.summary.histogram("d_", self.D_)
         self.real_A_sum = tf.summary.image("target_A", deprocess(self.real_A)[...,::-1])
         self.real_B_sum = tf.summary.image("real_B", deprocess(self.real_B)[...,::-1])
+        self.fake_B_sample_sum = tf.summary.image("fake_B_sample", deprocess(self.fake_B_sample)[...,::-1])
         self.fake_B_sum = tf.summary.image("fake_B", deprocess(self.fake_B)[...,::-1])
 
         self.d_loss_real_sum = tf.summary.scalar("d_loss_real", self.d_loss_real)
@@ -131,23 +133,32 @@ class pix2pix(object):
 
     def train(self, args):
         """Train pix2pix"""
-        d_optim = tf.train.AdamOptimizer(args.lr, beta1=args.beta1) \
-                          .minimize(self.d_loss, var_list=self.d_vars)
-        g_optim = tf.train.AdamOptimizer(args.lr, beta1=args.beta1) \
-                          .minimize(self.g_loss, var_list=self.g_vars)
+
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops):
+            d_optim = tf.train.AdamOptimizer(args.lr, beta1=args.beta1) \
+                              .minimize(self.d_loss, var_list=self.d_vars)
+
+        with tf.control_dependencies([d_optim]):
+            g_optim = tf.train.AdamOptimizer(args.lr, beta1=args.beta1) \
+                              .minimize(self.g_loss, var_list=self.g_vars)
 
         init_op = tf.global_variables_initializer()
         self.sess.run(init_op)
 
-        self.g_sum = tf.summary.merge([self.d__sum,self.real_A_sum,self.real_B_sum,
-            self.fake_B_sum, self.d_loss_fake_sum, self.g_loss_sum])
-        self.d_sum = tf.summary.merge([self.d_sum, self.d_loss_real_sum, self.d_loss_sum])
+        # self.g_sum = tf.summary.merge([self.d__sum,self.real_A_sum,self.real_B_sum,self.fake_B_sample_sum,
+        #     self.fake_B_sum, self.d_loss_fake_sum, self.g_loss_sum])
+        # self.d_sum = tf.summary.merge([self.d_sum, self.d_loss_real_sum, self.d_loss_sum])
+
+        self.sum = tf.summary.merge([self.d__sum,self.real_A_sum,self.real_B_sum,self.fake_B_sample_sum,
+            self.fake_B_sum, self.d_loss_fake_sum, self.g_loss_sum, self.d_sum, self.d_loss_real_sum, self.d_loss_sum])
+
         self.writer = tf.summary.FileWriter(self.checkpoint_dir, self.sess.graph)
 
         counter = 1
         start_time = time.time()
 
-        if self.load(self.checkpoint_dir):
+        if args.checkpoint is not None and self.load(os.path.join(args.EXP_OUT,str(args.checkpoint))):
             print(" [*] Load SUCCESS")
         else:
             print(" [!] Load failed...")
@@ -160,31 +171,54 @@ class pix2pix(object):
 
             # for idx in xrange(0, batch_idxs):
             while True:
-
-                # Update D network
-                try:
-                    if np.mod(counter, 200) == 1:
-                        _, summary_str = self.sess.run([d_optim, self.d_sum],
+                if np.mod(counter, args.num_print) == 1:
+                    try:
+                        _, summary_str, d_l, g_l = self.sess.run([g_optim, self.sum, self.d_loss, self.g_loss],
                                                        feed_dict={ self.iter_handle: data_handle })
-                        self.writer.add_summary(summary_str, counter)
-                    else:
-                        self.sess.run(d_optim,feed_dict={ self.iter_handle: data_handle })
-                except tf.errors.OutOfRangeError:
-                    print("INFO: Training set has %d elements, starting next epoch" % counter-1)
-                    break
+                    except tf.errors.OutOfRangeError:
+                        print("INFO: Done with all steps")
+                        break
 
-                # Update G network
-                try:
-                    if np.mod(counter, 200) == 1:
-                        _, summary_str = self.sess.run([g_optim, self.g_sum],
-                                                       feed_dict={ self.iter_handle: data_handle })
-                        self.writer.add_summary(summary_str, counter)
-                    else:
+                    self.writer.add_summary(summary_str, counter)
+                    print("Step: [%2d] rate: %4.4f steps/sec, d_loss: %.8f, g_loss: %.8f" \
+                        % (counter,args.batch_size/(time.time() - start_time), d_l, g_l))
+                    stdout.flush()
+                else:
+                    try:
                         self.sess.run(g_optim,feed_dict={ self.iter_handle: data_handle })
-                except tf.errors.OutOfRangeError:
-                    print("INFO: Training set has %d elements, starting next epoch" % counter-1)
-                    break
+                    except tf.errors.OutOfRangeError:
+                        print("INFO: Done with all steps")
+                        break
 
+
+                # if np.mod(counter, 200) == 1:
+                #     # Update D network
+                #     try:
+                #         _, summary_str = self.sess.run([d_optim, self.d_sum],
+                #                                        feed_dict={ self.iter_handle: data_handle })
+                #     except tf.errors.OutOfRangeError:
+                #         print("INFO: Done with all steps")
+                #         break
+                #     self.writer.add_summary(summary_str, counter)
+                #     # Update G network
+                #     try:
+                #         _, summary_str = self.sess.run([g_optim, self.g_sum],
+                #                                        feed_dict={ self.iter_handle: data_handle })
+                #     except tf.errors.OutOfRangeError:
+                #         print("INFO: Done with all steps")
+                #         break
+                #     self.writer.add_summary(summary_str, counter)
+                # else:
+                #     try:
+                #         self.sess.run(d_optim,feed_dict={ self.iter_handle: data_handle })
+                #     except tf.errors.OutOfRangeError:
+                #         print("INFO: Done with all steps")
+                #         break
+                #     try:
+                #         self.sess.run(g_optim,feed_dict={ self.iter_handle: data_handle })
+                #     except tf.errors.OutOfRangeError:
+                #         print("INFO: Done with all steps")
+                #         break
                 # Run g_optim twice to make sure that d_loss does not go to zero (different from paper)
                 # try:
                 #     _, summary_str = self.sess.run([g_optim, self.g_sum],
@@ -219,6 +253,35 @@ class pix2pix(object):
                 if np.mod(counter, 2500) == 2:
                     self.save(self.checkpoint_dir, counter)
 
+    def validate(self, args):
+        """Train pix2pix"""
+        pred_array = np.zeros((15,2))
+        counter = 1
+        assert(self.load(os.path.join(args.EXP_OUT,str(args.checkpoint))),"No checkpoint found to validate on")
+
+        # for epoch in xrange(args.epoch):
+        for epoch in range(0,1):
+
+            validation_data = self.data.get_validation_set()
+            valid_iterator = validation_data.batch(args.batch_size).make_one_shot_iterator()
+            valid_handle = self.sess.run(valid_iterator.string_handle())
+            # for idx in xrange(0, batch_idxs):
+            while True:
+                # Update D network
+                try:
+                    outImage, real_val, fake_val = self.sess.run([self.fake_B,self.D,self.D_],
+                                                   feed_dict={ self.iter_handle: valid_handle })
+                except tf.errors.OutOfRangeError:
+                    print("INFO: Done with all steps")
+                    break
+                # print(real_val[0],fake_val[0])
+                pred_array[counter-1,:] = [np.mean(real_val[0]),np.mean(fake_val[0])]
+                filename = str(args.checkpoint)+"_validation" + str(counter) + ".png"
+                cv2.imwrite(os.path.join(args.file_output_dir,filename), deprocess(outImage[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+                counter += 1
+            print(pred_array)
+            return pred_array
+
     def discriminator(self, image, y=None, reuse=False):
 
         with tf.variable_scope("discriminator") as scope:
@@ -235,12 +298,14 @@ class pix2pix(object):
             # h1 is (64 x 64 x self.df_dim*2)
             h2 = lrelu(self.d_bn2(conv2d(h1, self.df_dim*4, name='d_h2_conv')))
             # h2 is (32x 32 x self.df_dim*4)
-            h3 = lrelu(self.d_bn3(conv2d(h2, self.df_dim*8, d_h=1, d_w=1, name='d_h3_conv')))
-            # h3 is (16 x 16 x self.df_dim*8)
+            h3 = lrelu(self.d_bn3(conv2d(h2, self.df_dim*8, d_h=1, d_w=1, name='d_h3_conv',pad="VALID")))
+            # h3 is (31 x 31 x self.df_dim*8)
+            # h4 = conv2d(h3, 1, d_h=1, d_w=1, name='d_h4_conv',pad="VALID")
+            # h4 is (30 x 30 x 1)
             h4 = linear(tf.reshape(h3, [self.batch_size, -1]), 1, 'd_h3_lin')
+            # print(h4.shape)
 
             return tf.nn.sigmoid(h4), h4
-
     def generator(self, image, y=None):
         with tf.variable_scope("generator") as scope:
 
@@ -312,7 +377,6 @@ class pix2pix(object):
             # d8 is (256 x 256 x output_c_dim)
 
             return tf.nn.tanh(self.d8)
-
     def sampler(self, image, y=None):
 
         with tf.variable_scope("generator") as scope:
@@ -398,58 +462,7 @@ class pix2pix(object):
         self.saver.save(self.sess,
                         os.path.join(self.checkpoint_dir, model_name),
                         global_step=step)
-
     def load(self, checkpoint_dir):
         print(" [*] Reading checkpoint...")
-
-        model_dir = "%s_%s_%s" % (self.dataset_name, self.batch_size, self.output_size)
-        checkpoint_dir = os.path.join(self.checkpoint_dir, model_dir)
-
-        ckpt = tf.train.get_checkpoint_state(checkpoint_dir)
-        if ckpt and ckpt.model_checkpoint_path:
-            ckpt_name = os.path.basename(ckpt.model_checkpoint_path)
-            self.saver.restore(self.sess, os.path.join(checkpoint_dir, ckpt_name))
-            return True
-        else:
-            return False
-
-    # def test(self, args):
-    #     """Test pix2pix"""
-    #     init_op = tf.global_variables_initializer()
-    #     self.sess.run(init_op)
-    #
-    #     sample_files = glob('./datasets/{}/val/*.jpg'.format(self.dataset_name))
-    #
-    #     # sort testing input
-    #     n = [int(i) for i in map(lambda x: x.split('/')[-1].split('.jpg')[0], sample_files)]
-    #     sample_files = [x for (y, x) in sorted(zip(n, sample_files))]
-    #
-    #     # load testing input
-    #     print("Loading testing images ...")
-    #     sample = [load_data(sample_file, is_test=True) for sample_file in sample_files]
-    #
-    #     if (self.is_grayscale):
-    #         sample_images = np.array(sample).astype(np.float32)[:, :, :, None]
-    #     else:
-    #         sample_images = np.array(sample).astype(np.float32)
-    #
-    #     sample_images = [sample_images[i:i+self.batch_size]
-    #                      for i in xrange(0, len(sample_images), self.batch_size)]
-    #     sample_images = np.array(sample_images)
-    #     print(sample_images.shape)
-    #
-    #     start_time = time.time()
-    #     if self.load(self.checkpoint_dir):
-    #         print(" [*] Load SUCCESS")
-    #     else:
-    #         print(" [!] Load failed...")
-    #
-    #     for i, sample_image in enumerate(sample_images):
-    #         idx = i+1
-    #         print("sampling image ", idx)
-    #         samples = self.sess.run(
-    #             self.fake_B_sample,
-    #             feed_dict={self.real_data: sample_image}
-    #         )
-    #         save_images(samples, [self.batch_size, 1],
-    #                     './{}/test_{:04d}.png'.format(args.test_dir, idx))
+        checkpoint = tf.train.latest_checkpoint(checkpoint_dir)
+        self.saver.restore(self.sess, checkpoint)
