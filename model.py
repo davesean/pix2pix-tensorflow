@@ -177,91 +177,52 @@ class pix2pix(object):
                                                        feed_dict={ self.iter_handle: data_handle })
                     except tf.errors.OutOfRangeError:
                         print("INFO: Done with all steps")
+                        self.save(self.checkpoint_dir, counter)
                         break
 
                     self.writer.add_summary(summary_str, counter)
                     print("Step: [%2d] rate: %4.4f steps/sec, d_loss: %.8f, g_loss: %.8f" \
-                        % (counter,args.batch_size/(time.time() - start_time), d_l, g_l))
+                        % (counter,args.batch_size*counter/(time.time() - start_time), d_l, g_l))
                     stdout.flush()
                 else:
                     try:
                         self.sess.run(g_optim,feed_dict={ self.iter_handle: data_handle })
                     except tf.errors.OutOfRangeError:
-                        print("INFO: Done with all steps")
+                        print("INFO: Done with all training steps")
+                        self.save(self.checkpoint_dir, counter)
                         break
-
-
-                # if np.mod(counter, 200) == 1:
-                #     # Update D network
-                #     try:
-                #         _, summary_str = self.sess.run([d_optim, self.d_sum],
-                #                                        feed_dict={ self.iter_handle: data_handle })
-                #     except tf.errors.OutOfRangeError:
-                #         print("INFO: Done with all steps")
-                #         break
-                #     self.writer.add_summary(summary_str, counter)
-                #     # Update G network
-                #     try:
-                #         _, summary_str = self.sess.run([g_optim, self.g_sum],
-                #                                        feed_dict={ self.iter_handle: data_handle })
-                #     except tf.errors.OutOfRangeError:
-                #         print("INFO: Done with all steps")
-                #         break
-                #     self.writer.add_summary(summary_str, counter)
-                # else:
-                #     try:
-                #         self.sess.run(d_optim,feed_dict={ self.iter_handle: data_handle })
-                #     except tf.errors.OutOfRangeError:
-                #         print("INFO: Done with all steps")
-                #         break
-                #     try:
-                #         self.sess.run(g_optim,feed_dict={ self.iter_handle: data_handle })
-                #     except tf.errors.OutOfRangeError:
-                #         print("INFO: Done with all steps")
-                #         break
-                # Run g_optim twice to make sure that d_loss does not go to zero (different from paper)
-                # try:
-                #     _, summary_str = self.sess.run([g_optim, self.g_sum],
-                #                                    feed_dict={ self.iter_handle: data_handle })
-                #     self.writer.add_summary(summary_str, counter)
-                # except tf.errors.OutOfRangeError:
-                #     print("INFO: Training set has %d elements, starting next epoch" % counter-1)
-                #     break
-                # try:
-                #     errD_fake = self.d_loss_fake.eval({self.iter_handle: data_handle})
-                # except tf.errors.OutOfRangeError:
-                #     print("INFO: Training set has %d elements, starting next epoch" % counter-1)
-                #     break
-                # try:
-                #     errD_real = self.d_loss_real.eval({self.iter_handle: data_handle})
-                # except tf.errors.OutOfRangeError:
-                #     print("INFO: Training set has %d elements, starting next epoch" % counter-1)
-                #     break
-                # try:
-                #     errG = self.g_loss.eval({self.iter_handle: data_handle})
-                # except tf.errors.OutOfRangeError:
-                #     print("INFO: Training set has %d elements, starting next epoch" % counter-1)
-                #     break
-
                 counter += 1
-                # print("Step: [%2d] time: %4.4f, d_loss: %.8f, g_loss: %.8f" \
-                #     % (counter,time.time() - start_time, errD_fake+errD_real, errG))
 
-                # if np.mod(counter, 100) == 1:
-                #     self.sample_model(args.sample_dir, epoch, idx)
 
-                if np.mod(counter, 2500) == 2:
-                    self.save(self.checkpoint_dir, counter)
+        validation_data = self.data.get_validation_set()
+        valid_iterator = validation_data.batch(args.batch_size).make_one_shot_iterator()
+        valid_handle = self.sess.run(valid_iterator.string_handle())
+        while True:
+            # Update D network
+            try:
+                outImage, real_val, fake_val = self.sess.run([self.fake_B,self.D,self.D_],
+                                               feed_dict={ self.iter_handle: valid_handle })
+            except tf.errors.OutOfRangeError:
+                print("INFO: Done with all validation steps")
+                break
+            # print(real_val[0],fake_val[0])
+            pred_array[counter-1,:] = [np.mean(real_val[0]),np.mean(fake_val[0])]
+            filename = str(args.RUN_id)+"_validation" + str(counter) + ".png"
+            cv2.imwrite(os.path.join(args.file_output_dir,filename), deprocess(outImage[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            counter += 1
+        print(pred_array)
+        return pred_array
+
 
     def validate(self, args):
         """Train pix2pix"""
         pred_array = np.zeros((15,2))
         counter = 1
-        assert(self.load(os.path.join(args.EXP_OUT,str(args.checkpoint))),"No checkpoint found to validate on")
+
+        self.load(os.path.join(args.EXP_OUT,str(args.checkpoint)))
 
         # for epoch in xrange(args.epoch):
         for epoch in range(0,1):
-
             validation_data = self.data.get_validation_set()
             valid_iterator = validation_data.batch(args.batch_size).make_one_shot_iterator()
             valid_handle = self.sess.run(valid_iterator.string_handle())
@@ -300,9 +261,9 @@ class pix2pix(object):
             # h2 is (32x 32 x self.df_dim*4)
             h3 = lrelu(self.d_bn3(conv2d(h2, self.df_dim*8, d_h=1, d_w=1, name='d_h3_conv',pad="VALID")))
             # h3 is (31 x 31 x self.df_dim*8)
-            # h4 = conv2d(h3, 1, d_h=1, d_w=1, name='d_h4_conv',pad="VALID")
+            h4 = conv2d(h3, 1, d_h=1, d_w=1, name='d_h4_conv',pad="VALID")
             # h4 is (30 x 30 x 1)
-            h4 = linear(tf.reshape(h3, [self.batch_size, -1]), 1, 'd_h3_lin')
+            # h4 = linear(tf.reshape(h3, [self.batch_size, -1]), 1, 'd_h3_lin')
             # print(h4.shape)
 
             return tf.nn.sigmoid(h4), h4

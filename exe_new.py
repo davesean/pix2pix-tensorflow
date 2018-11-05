@@ -84,9 +84,10 @@ def main(dataset, net_config, _run):
         setattr(a, key, net_config[key])
 
     setattr(a,'EXP_OUT',EXP_OUT)
+    setattr(a,'RUN_id',_run._id)
 
     output_dir = create_directories(_run._id, ex)
-    
+
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.9)
     with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
         # load the dataset class
@@ -98,7 +99,7 @@ def main(dataset, net_config, _run):
 )
 
         if a.mode == 'train':
-            model.train(a)
+            _run.info['predictions'] = model.train(a)
         elif a.mode == 'valid':
             _run.info['predictions'] = model.validate(a)
         else:
