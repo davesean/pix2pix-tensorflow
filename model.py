@@ -24,7 +24,7 @@ class pix2pix(object):
                  batch_size=1, sample_size=1, output_size=256,
                  gf_dim=64, df_dim=64, L1_lambda=100,
                  input_c_dim=3, output_c_dim=3, dataset_name='cityscapes_GAN',
-                 checkpoint_dir=None, data=None):
+                 checkpoint_dir=None, data=None, momentum=0.9):
         """
 
         Args:
@@ -52,25 +52,25 @@ class pix2pix(object):
         self.L1_lambda = L1_lambda
 
         # batch normalization : deals with poor initialization helps gradient flow
-        self.d_bn1 = batch_norm(name='d_bn1')
-        self.d_bn2 = batch_norm(name='d_bn2')
+        self.d_bn1 = batch_norm(name='d_bn1', momentum=momentum)
+        self.d_bn2 = batch_norm(name='d_bn2', momentum=momentum)
         self.d_bn3 = batch_norm(name='d_bn3')
 
-        self.g_bn_e2 = batch_norm(name='g_bn_e2')
-        self.g_bn_e3 = batch_norm(name='g_bn_e3')
-        self.g_bn_e4 = batch_norm(name='g_bn_e4')
-        self.g_bn_e5 = batch_norm(name='g_bn_e5')
-        self.g_bn_e6 = batch_norm(name='g_bn_e6')
-        self.g_bn_e7 = batch_norm(name='g_bn_e7')
-        self.g_bn_e8 = batch_norm(name='g_bn_e8')
+        self.g_bn_e2 = batch_norm(name='g_bn_e2', momentum=momentum)
+        self.g_bn_e3 = batch_norm(name='g_bn_e3', momentum=momentum)
+        self.g_bn_e4 = batch_norm(name='g_bn_e4', momentum=momentum)
+        self.g_bn_e5 = batch_norm(name='g_bn_e5', momentum=momentum)
+        self.g_bn_e6 = batch_norm(name='g_bn_e6', momentum=momentum)
+        self.g_bn_e7 = batch_norm(name='g_bn_e7', momentum=momentum)
+        self.g_bn_e8 = batch_norm(name='g_bn_e8', momentum=momentum)
 
-        self.g_bn_d1 = batch_norm(name='g_bn_d1')
-        self.g_bn_d2 = batch_norm(name='g_bn_d2')
-        self.g_bn_d3 = batch_norm(name='g_bn_d3')
-        self.g_bn_d4 = batch_norm(name='g_bn_d4')
-        self.g_bn_d5 = batch_norm(name='g_bn_d5')
-        self.g_bn_d6 = batch_norm(name='g_bn_d6')
-        self.g_bn_d7 = batch_norm(name='g_bn_d7')
+        self.g_bn_d1 = batch_norm(name='g_bn_d1', momentum=momentum)
+        self.g_bn_d2 = batch_norm(name='g_bn_d2', momentum=momentum)
+        self.g_bn_d3 = batch_norm(name='g_bn_d3', momentum=momentum)
+        self.g_bn_d4 = batch_norm(name='g_bn_d4', momentum=momentum)
+        self.g_bn_d5 = batch_norm(name='g_bn_d5', momentum=momentum)
+        self.g_bn_d6 = batch_norm(name='g_bn_d6', momentum=momentum)
+        self.g_bn_d7 = batch_norm(name='g_bn_d7', momentum=momentum)
 
         self.data = data
         self.dataset_name = dataset_name
@@ -193,10 +193,11 @@ class pix2pix(object):
                         break
                 counter += 1
 
-
+        pred_array = np.zeros((15,2))
         validation_data = self.data.get_validation_set()
         valid_iterator = validation_data.batch(args.batch_size).make_one_shot_iterator()
         valid_handle = self.sess.run(valid_iterator.string_handle())
+        counter = 1
         while True:
             # Update D network
             try:
@@ -230,7 +231,7 @@ class pix2pix(object):
             while True:
                 # Update D network
                 try:
-                    outImage, real_val, fake_val = self.sess.run([self.fake_B,self.D,self.D_],
+                    outImage, target, real_val, fake_val = self.sess.run([self.fake_B,self.real_B,self.D,self.D_],
                                                    feed_dict={ self.iter_handle: valid_handle })
                 except tf.errors.OutOfRangeError:
                     print("INFO: Done with all steps")
@@ -239,6 +240,9 @@ class pix2pix(object):
                 pred_array[counter-1,:] = [np.mean(real_val[0]),np.mean(fake_val[0])]
                 filename = str(args.checkpoint)+"_validation" + str(counter) + ".png"
                 cv2.imwrite(os.path.join(args.file_output_dir,filename), deprocess(outImage[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+                if args.val_target_output == True:
+                    filename = "target_validation" + str(counter) + ".png"
+                    cv2.imwrite(os.path.join(args.file_output_dir,filename), deprocess(target[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
                 counter += 1
             print(pred_array)
             return pred_array
@@ -427,3 +431,4 @@ class pix2pix(object):
         print(" [*] Reading checkpoint...")
         checkpoint = tf.train.latest_checkpoint(checkpoint_dir)
         self.saver.restore(self.sess, checkpoint)
+        return True

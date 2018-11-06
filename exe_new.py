@@ -95,18 +95,15 @@ def main(dataset, net_config, _run):
         data = data(**dataset)
         model = pix2pix(sess, image_size=a.input_image_size, batch_size=a.batch_size,
                         output_size=a.input_image_size, dataset_name=dataset['name'],
-                        checkpoint_dir=output_dir, data=data
-)
-
+                        checkpoint_dir=output_dir, data=data, momentum=a.batch_momentum,
+                        L1_lambda=int(a.l1_weight/a.gan_weight), gf_dim=a.ngf,
+                        df_dim=a.ndf)
         if a.mode == 'train':
             _run.info['predictions'] = model.train(a)
         elif a.mode == 'valid':
             _run.info['predictions'] = model.validate(a)
         else:
             model.test(a)
-
-
-
 
 
 if __name__ == '__main__':
