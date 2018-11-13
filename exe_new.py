@@ -97,11 +97,16 @@ def main(dataset, net_config, _run):
                         output_size=a.input_image_size, dataset_name=dataset['name'],
                         checkpoint_dir=output_dir, data=data, momentum=a.batch_momentum,
                         L1_lambda=int(a.l1_weight/a.gan_weight), gf_dim=a.ngf,
-                        df_dim=a.ndf)
+                        df_dim=a.ndf,label_smoothing=a.label_smoothing,
+                        noise_std_dev=a.noise_std_dev)
         if a.mode == 'train':
-            _run.info['predictions'] = model.train(a)
+            tmp = model.train(a)
+            _run.info['predictions'] = tmp
+            _run.info['mean_predictions'] = np.mean(tmp, axis=0)
         elif a.mode == 'valid':
-            _run.info['predictions'] = model.validate(a)
+            tmp = model.validate(a)
+            _run.info['predictions'] = tmp
+            _run.info['mean_predictions'] = np.mean(tmp, axis=0)
         else:
             model.test(a)
 
