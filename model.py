@@ -105,8 +105,8 @@ class pix2pix(object):
 
         self.real_AB = tf.concat([self.real_A, self.real_B], 3)
         self.fake_AB = tf.concat([self.real_A, self.fake_B], 3)
-        self.D, self.D_logits = self.discriminator(self.real_AB, reuse=False)
-        self.D_, self.D_logits_ = self.discriminator(self.fake_AB, reuse=True)
+        self.D, self.D_logits, self.Dlayers = self.discriminator(self.real_AB, reuse=False)
+        self.D_, self.D_logits_, self.Dlayers_ = self.discriminator(self.fake_AB, reuse=True)
 
         self.fake_B_sample = self.sampler(self.real_A)
 
@@ -118,7 +118,12 @@ class pix2pix(object):
         self.d_loss_real = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_logits, labels=tf.ones_like(self.D)*smoothing))
         self.d_loss_fake = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_logits_, labels=tf.zeros_like(self.D_)))
         self.g_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_logits_, labels=tf.ones_like(self.D_))) \
-                        + self.L1_lambda * tf.reduce_mean(tf.abs(self.real_B - self.fake_B))
+                        + self.L1_lambda * tf.reduce_mean(tf.abs(self.real_B - self.fake_B)) \
+                        + tf.reduce_mean(tf.abs(self.Dlayers[0]-self.Dlayers_[0])) \
+                        + tf.reduce_mean(tf.abs(self.Dlayers[1]-self.Dlayers_[1])) \
+                        + tf.reduce_mean(tf.abs(self.Dlayers[2]-self.Dlayers_[2])) \
+                        + tf.reduce_mean(tf.abs(self.Dlayers[3]-self.Dlayers_[3])) \
+                        + tf.reduce_mean(tf.abs(self.Dlayers[4]-self.Dlayers_[4])) \
 
         self.d_loss = self.d_loss_real + self.d_loss_fake
 
@@ -261,7 +266,6 @@ class pix2pix(object):
         print(pred_array)
         return pred_array
 
-
     def validate(self, args):
         """Train pix2pix"""
         pred_array = np.zeros((15,2))
@@ -355,7 +359,6 @@ class pix2pix(object):
             # print(pred_array)
             # return pred_array
 
-
     def discriminator(self, image, y=None, reuse=False):
 
         with tf.variable_scope("discriminator") as scope:
@@ -379,7 +382,8 @@ class pix2pix(object):
             # h4 = linear(tf.reshape(h3, [self.batch_size, -1]), 1, 'd_h3_lin')
             # print(h4.shape)
 
-            return tf.nn.sigmoid(h4), h4
+            return tf.nn.sigmoid(h4), h4, [h0, h1, h2, h3, h4]
+
     def generator(self, image, y=None):
         with tf.variable_scope("generator") as scope:
 
@@ -451,6 +455,7 @@ class pix2pix(object):
             # d8 is (256 x 256 x output_c_dim)
 
             return tf.nn.tanh(self.d8)
+
     def sampler(self, image, y=None):
 
         with tf.variable_scope("generator") as scope:
@@ -524,8 +529,6 @@ class pix2pix(object):
             # d8 is (256 x 256 x output_c_dim)
 
             return tf.nn.tanh(self.d8)
-
-
     def save(self, checkpoint_dir, step):
         model_name = "pix2pix.model"
         model_dir = "%s_%s_%s" % (self.dataset_name, self.batch_size, self.output_size)
