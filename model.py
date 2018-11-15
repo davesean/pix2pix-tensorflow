@@ -306,6 +306,56 @@ class pix2pix(object):
             print(pred_array)
             return pred_array
 
+    def predict(self, args, images, targets):
+        """Predict generator output on other images"""
+
+        pred_array = np.zeros((len(images),1))
+        counter = 1
+        # Check that a checkpoint directory is given, to load from
+        assert(args.checkpoint is not None)
+        self.load(os.path.join(args.EXP_OUT,str(args.checkpoint)))
+
+        if not os.path.exists(os.path.join(args.file_output_dir,str(args.checkpoint))):
+            os.makedirs(os.path.join(args.file_output_dir,str(args.checkpoint)))
+
+        img_w=256
+        img_h=256
+
+        # validation_data = self.data.get_measureset()
+        # valid_iterator = validation_data.batch(args.batch_size).make_one_shot_iterator()
+        # valid_handle = self.sess.run(valid_iterator.string_handle())
+
+        for epoch in range(0,1):
+            for image in images:
+                # image = np.float32(np.expand_dims(cv2.resize(cv2.imread(path),(img_w,img_h),interpolation=cv2.INTER_LINEAR), axis=0))
+                data = {'rgb': targets[counter-1], 'labels': tf.to_float(image[...,::-1])}
+
+                iterator = tf.data.Dataset.from_tensor_slices(data)\
+                           .batch(1).make_one_shot_iterator()
+                handle = self.sess.run(iterator.string_handle())
+
+                # Predict generator network
+                outImage, real_val, fake_val = self.sess.run([self.fake_B,self.D,self.D_],
+                                               feed_dict={ self.iter_handle: handle })
+
+                filename = "input_"+str(counter)+".png"
+                cv2.imwrite(os.path.join(args.file_output_dir,str(args.checkpoint),filename), cv2.cvtColor(image[0,:,:,:],cv2.COLOR_RGB2BGR), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+                filename = "target_"+str(counter)+".png"
+                cv2.imwrite(os.path.join(args.file_output_dir,str(args.checkpoint),filename), targets[counter-1][0,:,:,:], [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+
+                # Save the 30 x 30 output of the discriminator
+                filename = "realfield_"+str(counter)+".png"
+                cv2.imwrite(os.path.join(args.file_output_dir,str(args.checkpoint),filename), cv2.resize(255*real_val[0,:,:,0],(args.input_image_size,args.input_image_size),interpolation=cv2.INTER_NEAREST))
+                filename = "fakefield_"+str(counter)+".png"
+                cv2.imwrite(os.path.join(args.file_output_dir,str(args.checkpoint),filename), cv2.resize(255*fake_val[0,:,:,0],(args.input_image_size,args.input_image_size),interpolation=cv2.INTER_NEAREST))
+                filename = "synth_"+str(counter)+".png"
+                cv2.imwrite(os.path.join(args.file_output_dir,str(args.checkpoint),filename), deprocess(outImage[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+
+                counter += 1
+            # print(pred_array)
+            # return pred_array
+
+
     def discriminator(self, image, y=None, reuse=False):
 
         with tf.variable_scope("discriminator") as scope:
@@ -491,4 +541,5 @@ class pix2pix(object):
         print(" [*] Reading checkpoint...")
         checkpoint = tf.train.latest_checkpoint(checkpoint_dir)
         self.saver.restore(self.sess, checkpoint)
+        self.graph = tf.get_default_graph()
         return True

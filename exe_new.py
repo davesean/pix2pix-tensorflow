@@ -33,8 +33,6 @@ from sys import stdout
 from skimage.measure import compare_ssim
 from model import pix2pix
 
-Model = collections.namedtuple("Model", "inputs, targets, outputs, predict_real, predict_fake, discrim_loss, discrim_grads_and_vars, gen_loss_GAN, gen_loss_L1, gen_grads_and_vars,global_step, train")
-
 class Helper:
     name = 'A'
 
