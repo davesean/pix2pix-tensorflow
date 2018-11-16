@@ -7,6 +7,10 @@ import tensorflow as tf
 import numpy as np
 import cv2
 from six.moves import xrange
+import sys
+sys.path.insert(0, '../modular_semantic_segmentation')
+from xview.models.vgg16 import vgg16
+
 
 from ops import *
 
@@ -108,6 +112,13 @@ class pix2pix(object):
         self.D, self.D_logits, self.Dlayers = self.discriminator(self.real_AB, reuse=False)
         self.D_, self.D_logits_, self.Dlayers_ = self.discriminator(self.fake_AB, reuse=True)
 
+        params = {'activation': tf.nn.relu, 'padding': 'same', 'reuse': tf.AUTO_REUSE,
+                  'batch_normalization': False, 'training': True,
+                  'trainable': True}
+
+        self.feat = vgg16(self.D, 'vgg', params)
+        self.feat_ = vgg16(self.D_, 'vgg', params)
+
         self.fake_B_sample = self.sampler(self.real_A)
 
         if self.label_smoothing == True:
@@ -124,6 +135,12 @@ class pix2pix(object):
                         + tf.reduce_mean(tf.abs(self.Dlayers[2]-self.Dlayers_[2])) \
                         + tf.reduce_mean(tf.abs(self.Dlayers[3]-self.Dlayers_[3])) \
                         + tf.reduce_mean(tf.abs(self.Dlayers[4]-self.Dlayers_[4])) \
+                        + tf.reduce_mean(tf.abs(self.feat['conv1_2']-self.feat_['conv1_2'])) \
+                        + tf.reduce_mean(tf.abs(self.feat['conv2_2']-self.feat_['conv2_2'])) \
+                        + tf.reduce_mean(tf.abs(self.feat['conv3_3']-self.feat_['conv3_3'])) \
+                        + tf.reduce_mean(tf.abs(self.feat['conv4_3']-self.feat_['conv4_3'])) \
+                        + tf.reduce_mean(tf.abs(self.feat['conv5_3']-self.feat_['conv5_3'])) \
+
 
         self.d_loss = self.d_loss_real + self.d_loss_fake
 
