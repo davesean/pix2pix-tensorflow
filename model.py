@@ -112,14 +112,19 @@ class pix2pix(object):
         self.D, self.D_logits, self.Dlayers = self.discriminator(self.real_AB, reuse=False)
         self.D_, self.D_logits_, self.Dlayers_ = self.discriminator(self.fake_AB, reuse=True)
 
-        params = {'activation': tf.nn.relu, 'padding': 'same', 'reuse': tf.AUTO_REUSE,
+        params = {'activation': tf.nn.relu, 'padding': 'same', 'reuse': False,
                   'batch_normalization': False, 'training': True,
                   'trainable': True}
 
-        self.feat = vgg16(self.D, 'vgg', params)
-        self.feat_ = vgg16(self.D_, 'vgg', params)
+        self.feat = vgg16(self.real_A, 'g_vgg', params)
 
-        self.fake_B_sample = self.sampler(self.real_A)
+        params = {'activation': tf.nn.relu, 'padding': 'same', 'reuse': True,
+                  'batch_normalization': False, 'training': True,
+                  'trainable': True}
+
+        self.feat_ = vgg16(self.fake_B, 'g_vgg', params)
+
+        # self.fake_B_sample = self.sampler(self.real_A)
 
         if self.label_smoothing == True:
             smoothing = tf.random_uniform(shape=[1],minval=0.9,maxval=1)
@@ -169,10 +174,18 @@ class pix2pix(object):
 
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
-            d_optim = tf.train.AdamOptimizer(args.lr, beta1=args.beta1) \
+            # d_optim = tf.train.AdamOptimizer(args.lr, beta1=args.beta1) \
+            #                   .minimize(self.d_loss, var_list=self.d_vars)
+            d_optim = tf.train.MomentumOptimizer(args.lr,0.9) \
                               .minimize(self.d_loss, var_list=self.d_vars)
 
         with tf.control_dependencies([d_optim]):
+            # d_optim_2 = tf.train.AdamOptimizer(args.lr, beta1=args.beta1) \
+            #                   .minimize(self.d_loss, var_list=self.d_vars)
+            d_optim_2 = tf.train.MomentumOptimizer(args.lr,0.9) \
+                              .minimize(self.d_loss, var_list=self.d_vars)
+
+        with tf.control_dependencies([d_optim_2]):
             g_optim = tf.train.AdamOptimizer(args.lr, beta1=args.beta1) \
                               .minimize(self.g_loss, var_list=self.g_vars)
 
@@ -551,8 +564,8 @@ class pix2pix(object):
         model_dir = "%s_%s_%s" % (self.dataset_name, self.batch_size, self.output_size)
         checkpoint_dir = os.path.join(self.checkpoint_dir, model_dir)
 
-        if not os.path.exists(checkpoint_dir):
-            os.makedirs(checkpoint_dir)
+        # if not os.path.exists(checkpoint_dir):
+        #     os.makedirs(checkpoint_dir)
 
         self.saver.save(self.sess,
                         os.path.join(self.checkpoint_dir, model_name),
