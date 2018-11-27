@@ -112,17 +112,17 @@ class pix2pix(object):
         self.D, self.D_logits, self.Dlayers = self.discriminator(self.real_AB, reuse=False)
         self.D_, self.D_logits_, self.Dlayers_ = self.discriminator(self.fake_AB, reuse=True)
 
-        params = {'activation': tf.nn.relu, 'padding': 'same', 'reuse': False,
-                  'batch_normalization': False, 'training': True,
-                  'trainable': True}
-
-        self.feat = vgg16(self.real_A, 'g_vgg', params)
-
-        params = {'activation': tf.nn.relu, 'padding': 'same', 'reuse': True,
-                  'batch_normalization': False, 'training': True,
-                  'trainable': True}
-
-        self.feat_ = vgg16(self.fake_B, 'g_vgg', params)
+        # params = {'activation': tf.nn.relu, 'padding': 'same', 'reuse': False,
+        #           'batch_normalization': False, 'training': True,
+        #           'trainable': True}
+        #
+        # self.feat = vgg16(self.real_A, 'g_vgg', params)
+        #
+        # params = {'activation': tf.nn.relu, 'padding': 'same', 'reuse': True,
+        #           'batch_normalization': False, 'training': True,
+        #           'trainable': True}
+        #
+        # self.feat_ = vgg16(self.fake_B, 'g_vgg', params)
 
         # self.fake_B_sample = self.sampler(self.real_A)
 
@@ -140,11 +140,11 @@ class pix2pix(object):
                         + tf.reduce_mean(tf.abs(self.Dlayers[2]-self.Dlayers_[2])) \
                         + tf.reduce_mean(tf.abs(self.Dlayers[3]-self.Dlayers_[3])) \
                         + tf.reduce_mean(tf.abs(self.Dlayers[4]-self.Dlayers_[4])) \
-                        + tf.reduce_mean(tf.abs(self.feat['conv1_2']-self.feat_['conv1_2'])) \
-                        + tf.reduce_mean(tf.abs(self.feat['conv2_2']-self.feat_['conv2_2'])) \
-                        + tf.reduce_mean(tf.abs(self.feat['conv3_3']-self.feat_['conv3_3'])) \
-                        + tf.reduce_mean(tf.abs(self.feat['conv4_3']-self.feat_['conv4_3'])) \
-                        + tf.reduce_mean(tf.abs(self.feat['conv5_3']-self.feat_['conv5_3'])) \
+                        # + tf.reduce_mean(tf.abs(self.feat['conv1_2']-self.feat_['conv1_2'])) \
+                        # + tf.reduce_mean(tf.abs(self.feat['conv2_2']-self.feat_['conv2_2'])) \
+                        # + tf.reduce_mean(tf.abs(self.feat['conv3_3']-self.feat_['conv3_3'])) \
+                        # + tf.reduce_mean(tf.abs(self.feat['conv4_3']-self.feat_['conv4_3'])) \
+                        # + tf.reduce_mean(tf.abs(self.feat['conv5_3']-self.feat_['conv5_3'])) \
 
 
         self.d_loss = self.d_loss_real + self.d_loss_fake
@@ -339,6 +339,112 @@ class pix2pix(object):
                 counter += 1
             print(pred_array)
             return pred_array
+
+    def outputAllData(self, args):
+        """Output training, measure and validation set for this network for futher use"""
+
+        # Load checkpoint given experiment number
+        self.load(os.path.join(args.EXP_OUT,str(args.checkpoint)))
+
+        folder_dir = os.path.join(args.file_output_dir,str(args.checkpoint)+"_full")
+
+        # Create a folder for the output
+        if not os.path.exists(folder_dir):
+            os.makedirs(folder_dir)
+
+        print("INFO: Beginning Measure Output")
+
+        measure_data = self.data.get_measureset()
+        measure_iterator = measure_data.batch(1).make_one_shot_iterator()
+        measure_handle = self.sess.run(measure_iterator.string_handle())
+
+        measure_path = os.path.join(folder_dir,"measure")
+
+        if not os.path.exists(measure_path):
+            os.makedirs(measure_path)
+
+        counter = 1
+        while True:
+            try:
+                outImage, inpt, target = self.sess.run([self.fake_B,self.real_A,self.real_B],
+                                               feed_dict={ self.iter_handle: measure_handle })
+            except tf.errors.OutOfRangeError:
+                print("INFO: Done with all steps")
+                break
+
+            # Save the output of the generator
+            filename = str(args.checkpoint)+"_measure" + str(counter) + ".png"
+            cv2.imwrite(os.path.join(measure_path,filename), deprocess(outImage[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            # Save the input
+            filename = "input_measure" + str(counter) + ".png"
+            cv2.imwrite(os.path.join(measure_path,filename), deprocess(inpt[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            # Save the target
+            filename = "target_measure" + str(counter) + ".png"
+            cv2.imwrite(os.path.join(measure_path,filename), deprocess(target[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            counter += 1
+
+        print("INFO: Beginning Training Output")
+
+        train_data = self.data.get_trainset()
+        train_iterator = train_data.batch(1).make_one_shot_iterator()
+        train_handle = self.sess.run(train_iterator.string_handle())
+
+        train_path = os.path.join(folder_dir,"training")
+
+        if not os.path.exists(train_path):
+            os.makedirs(train_path)
+
+        counter = 1
+        while True:
+            try:
+                outImage, inpt, target = self.sess.run([self.fake_B,self.real_A,self.real_B],
+                                               feed_dict={ self.iter_handle: train_handle })
+            except tf.errors.OutOfRangeError:
+                print("INFO: Done with all steps")
+                break
+
+            # Save the output of the generator
+            filename = str(args.checkpoint)+"_training" + str(counter) + ".png"
+            cv2.imwrite(os.path.join(train_path,filename), deprocess(outImage[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            # Save the input
+            filename = "input_training" + str(counter) + ".png"
+            cv2.imwrite(os.path.join(train_path,filename), deprocess(inpt[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            # Save the target
+            filename = "target_training" + str(counter) + ".png"
+            cv2.imwrite(os.path.join(train_path,filename), deprocess(target[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            counter += 1
+
+        print("INFO: Beginning Validation Output")
+
+        validation_data = self.data.get_validation_set()
+        valid_iterator = validation_data.batch(1).make_one_shot_iterator()
+        valid_handle = self.sess.run(valid_iterator.string_handle())
+
+        valid_path = os.path.join(folder_dir,"validation")
+
+        if not os.path.exists(valid_path):
+            os.makedirs(valid_path)
+
+        counter = 1
+        while True:
+            try:
+                outImage, inpt, target = self.sess.run([self.fake_B,self.real_A,self.real_B],
+                                               feed_dict={ self.iter_handle: valid_handle })
+            except tf.errors.OutOfRangeError:
+                print("INFO: Done with all steps")
+                break
+
+            # Save the output of the generator
+            filename = str(args.checkpoint)+"_validation" + str(counter) + ".png"
+            cv2.imwrite(os.path.join(valid_path,filename), deprocess(outImage[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            # Save the input
+            filename = "input_validation" + str(counter) + ".png"
+            cv2.imwrite(os.path.join(valid_path,filename), deprocess(inpt[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            # Save the target
+            filename = "target_validation" + str(counter) + ".png"
+            cv2.imwrite(os.path.join(valid_path,filename), deprocess(target[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            counter += 1
+
 
     def predict(self, args, images, targets):
         """Predict generator output on other images"""
