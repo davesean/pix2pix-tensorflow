@@ -32,8 +32,8 @@ class pix2pix(object):
                  batch_size=1, sample_size=1, output_size=256,
                  gf_dim=64, df_dim=64, L1_lambda=100,
                  input_c_dim=3, output_c_dim=3, dataset_name='cityscapes_GAN',
-                 checkpoint_dir=None, data=None, momentum=0.9,
-                 label_smoothing=False,noise_std_dev=0.0):
+                 checkpoint_dir=None, data=None, data_desc=None, momentum=0.9,
+                 label_smoothing=False,noise_std_dev=0.0, checkpoint=None):
         """
 
         Args:
@@ -84,10 +84,11 @@ class pix2pix(object):
         self.data = data
         self.dataset_name = dataset_name
         self.checkpoint_dir = checkpoint_dir
+        self.checkpoint_loaded = False
         self.label_smoothing = label_smoothing
 
         # Get the data descriptors with the shape of data coming
-        data_description = data.get_data_description()
+        data_description = data_desc
         data_description = [data_description[0], {
             key: [None, *description]
             for key, description in data_description[1].items()}]
@@ -100,6 +101,9 @@ class pix2pix(object):
         training_batch = iterator.get_next()
 
         self.build_model(training_batch['labels'], training_batch['rgb'])
+        if checkpoint is not None:
+            self.load(checkpoint)
+            self.checkpoint_loaded = True
 
     def build_model(self, input, target):
         self.real_B = preprocess(target)
@@ -135,11 +139,11 @@ class pix2pix(object):
         self.d_loss_fake = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_logits_, labels=tf.zeros_like(self.D_)))
         self.g_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.D_logits_, labels=tf.ones_like(self.D_))) \
                         + self.L1_lambda * tf.reduce_mean(tf.abs(self.real_B - self.fake_B)) \
-                        + tf.reduce_mean(tf.abs(self.Dlayers[0]-self.Dlayers_[0])) \
-                        + tf.reduce_mean(tf.abs(self.Dlayers[1]-self.Dlayers_[1])) \
-                        + tf.reduce_mean(tf.abs(self.Dlayers[2]-self.Dlayers_[2])) \
-                        + tf.reduce_mean(tf.abs(self.Dlayers[3]-self.Dlayers_[3])) \
-                        + tf.reduce_mean(tf.abs(self.Dlayers[4]-self.Dlayers_[4])) \
+                        # + tf.reduce_mean(tf.abs(self.Dlayers[0]-self.Dlayers_[0])) \
+                        # + tf.reduce_mean(tf.abs(self.Dlayers[1]-self.Dlayers_[1])) \
+                        # + tf.reduce_mean(tf.abs(self.Dlayers[2]-self.Dlayers_[2])) \
+                        # + tf.reduce_mean(tf.abs(self.Dlayers[3]-self.Dlayers_[3])) \
+                        # + tf.reduce_mean(tf.abs(self.Dlayers[4]-self.Dlayers_[4])) \
                         # + tf.reduce_mean(tf.abs(self.feat['conv1_2']-self.feat_['conv1_2'])) \
                         # + tf.reduce_mean(tf.abs(self.feat['conv2_2']-self.feat_['conv2_2'])) \
                         # + tf.reduce_mean(tf.abs(self.feat['conv3_3']-self.feat_['conv3_3'])) \
@@ -340,120 +344,15 @@ class pix2pix(object):
             print(pred_array)
             return pred_array
 
-    def outputAllData(self, args):
-        """Output training, measure and validation set for this network for futher use"""
-
-        # Load checkpoint given experiment number
-        self.load(os.path.join(args.EXP_OUT,str(args.checkpoint)))
-
-        folder_dir = os.path.join(args.file_output_dir,str(args.checkpoint)+"_full")
-
-        # Create a folder for the output
-        if not os.path.exists(folder_dir):
-            os.makedirs(folder_dir)
-
-        print("INFO: Beginning Measure Output")
-
-        measure_data = self.data.get_measureset()
-        measure_iterator = measure_data.batch(1).make_one_shot_iterator()
-        measure_handle = self.sess.run(measure_iterator.string_handle())
-
-        measure_path = os.path.join(folder_dir,"measure")
-
-        if not os.path.exists(measure_path):
-            os.makedirs(measure_path)
-
-        counter = 1
-        while True:
-            try:
-                outImage, inpt, target = self.sess.run([self.fake_B,self.real_A,self.real_B],
-                                               feed_dict={ self.iter_handle: measure_handle })
-            except tf.errors.OutOfRangeError:
-                print("INFO: Done with all steps")
-                break
-
-            # Save the output of the generator
-            filename = str(args.checkpoint)+"_measure" + str(counter) + ".png"
-            cv2.imwrite(os.path.join(measure_path,filename), deprocess(outImage[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            # Save the input
-            filename = "input_measure" + str(counter) + ".png"
-            cv2.imwrite(os.path.join(measure_path,filename), deprocess(inpt[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            # Save the target
-            filename = "target_measure" + str(counter) + ".png"
-            cv2.imwrite(os.path.join(measure_path,filename), deprocess(target[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            counter += 1
-
-        print("INFO: Beginning Training Output")
-
-        train_data = self.data.get_trainset()
-        train_iterator = train_data.batch(1).make_one_shot_iterator()
-        train_handle = self.sess.run(train_iterator.string_handle())
-
-        train_path = os.path.join(folder_dir,"training")
-
-        if not os.path.exists(train_path):
-            os.makedirs(train_path)
-
-        counter = 1
-        while True:
-            try:
-                outImage, inpt, target = self.sess.run([self.fake_B,self.real_A,self.real_B],
-                                               feed_dict={ self.iter_handle: train_handle })
-            except tf.errors.OutOfRangeError:
-                print("INFO: Done with all steps")
-                break
-
-            # Save the output of the generator
-            filename = str(args.checkpoint)+"_training" + str(counter) + ".png"
-            cv2.imwrite(os.path.join(train_path,filename), deprocess(outImage[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            # Save the input
-            filename = "input_training" + str(counter) + ".png"
-            cv2.imwrite(os.path.join(train_path,filename), deprocess(inpt[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            # Save the target
-            filename = "target_training" + str(counter) + ".png"
-            cv2.imwrite(os.path.join(train_path,filename), deprocess(target[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            counter += 1
-
-        print("INFO: Beginning Validation Output")
-
-        validation_data = self.data.get_validation_set()
-        valid_iterator = validation_data.batch(1).make_one_shot_iterator()
-        valid_handle = self.sess.run(valid_iterator.string_handle())
-
-        valid_path = os.path.join(folder_dir,"validation")
-
-        if not os.path.exists(valid_path):
-            os.makedirs(valid_path)
-
-        counter = 1
-        while True:
-            try:
-                outImage, inpt, target = self.sess.run([self.fake_B,self.real_A,self.real_B],
-                                               feed_dict={ self.iter_handle: valid_handle })
-            except tf.errors.OutOfRangeError:
-                print("INFO: Done with all steps")
-                break
-
-            # Save the output of the generator
-            filename = str(args.checkpoint)+"_validation" + str(counter) + ".png"
-            cv2.imwrite(os.path.join(valid_path,filename), deprocess(outImage[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            # Save the input
-            filename = "input_validation" + str(counter) + ".png"
-            cv2.imwrite(os.path.join(valid_path,filename), deprocess(inpt[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            # Save the target
-            filename = "target_validation" + str(counter) + ".png"
-            cv2.imwrite(os.path.join(valid_path,filename), deprocess(target[0,:,:,:]), [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            counter += 1
-
-
-    def predict(self, args, images, targets):
+    def predict(self, args, images, targets, file_name=None):
         """Predict generator output on other images"""
 
         pred_array = np.zeros((len(images),1))
         counter = 1
         # Check that a checkpoint directory is given, to load from
-        assert(args.checkpoint is not None)
-        self.load(os.path.join(args.EXP_OUT,str(args.checkpoint)))
+        if self.checkpoint_loaded is False:
+            assert(args.checkpoint is not None)
+            self.load(os.path.join(args.EXP_OUT,str(args.checkpoint)))
 
         if not os.path.exists(os.path.join(args.file_output_dir,str(args.checkpoint))):
             os.makedirs(os.path.join(args.file_output_dir,str(args.checkpoint)))
@@ -461,14 +360,10 @@ class pix2pix(object):
         img_w=256
         img_h=256
 
-        # validation_data = self.data.get_measureset()
-        # valid_iterator = validation_data.batch(args.batch_size).make_one_shot_iterator()
-        # valid_handle = self.sess.run(valid_iterator.string_handle())
-
         for epoch in range(0,1):
             for image in images:
                 # image = np.float32(np.expand_dims(cv2.resize(cv2.imread(path),(img_w,img_h),interpolation=cv2.INTER_LINEAR), axis=0))
-                data = {'rgb': targets[counter-1], 'labels': tf.to_float(image[...,::-1])}
+                data = {'rgb': tf.zeros_like(targets[counter-1]), 'labels': tf.to_float(image[...,::-1])}
 
                 iterator = tf.data.Dataset.from_tensor_slices(data)\
                            .batch(1).make_one_shot_iterator()
@@ -494,6 +389,40 @@ class pix2pix(object):
                 counter += 1
             # print(pred_array)
             # return pred_array
+
+
+    def transform(self, args, images):
+        """Transforms dataset from single images"""
+
+        # Check that a checkpoint was loaded at init
+        assert(self.checkpoint_loaded is not False)
+
+        synth = np.zeros((images.shape))
+
+        data = {'rgb': tf.zeros_like(images, dtype=tf.float32), 'labels': tf.to_float(images)}
+
+        iterator = tf.data.Dataset.from_tensor_slices(data)\
+                   .batch(1).make_one_shot_iterator()
+        handle = self.sess.run(iterator.string_handle())
+
+        # Predict generator network
+        # outImage, real_val, fake_val = self.sess.run([self.fake_B,self.D,self.D_],
+        #                                feed_dict={ self.iter_handle: handle })
+        for i in range(images.shape[0]):
+            outImage = self.sess.run([self.fake_B],
+                                           feed_dict={ self.iter_handle: handle })
+
+            synth[i,:,:,:] = deprocess(outImage[0][:,:,:])
+
+        # segmentation = cv2.cvtColor(images[0][0,:,:,:],cv2.COLOR_RGB2BGR)
+        # rgb_input = targets[0][0,:,:,:]
+
+        # Save the 30 x 30 output of the discriminator
+        # realfield = cv2.resize(255*real_val[0,:,:,0],(args.input_image_size,args.input_image_size),interpolation=cv2.INTER_NEAREST)
+        # fakefield = cv2.resize(255*fake_val[0,:,:,0],(args.input_image_size,args.input_image_size),interpolation=cv2.INTER_NEAREST)
+
+
+        return synth#, realfield, fakefield
 
     def discriminator(self, image, y=None, reuse=False):
 

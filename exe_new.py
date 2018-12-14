@@ -5,8 +5,7 @@ from __future__ import print_function
 import sys
 sys.path.insert(0, '../modular_semantic_segmentation')
 
-from experiments.utils import get_observer, load_data
-from experiments.evaluation import evaluate, import_weights_into_network
+from experiments.utils import get_observer
 
 from xview.datasets import Cityscapes_GAN
 from xview.datasets import get_dataset
