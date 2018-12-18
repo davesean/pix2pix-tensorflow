@@ -10,7 +10,7 @@ from six.moves import xrange
 import sys
 sys.path.insert(0, '../modular_semantic_segmentation')
 from xview.models.vgg16 import vgg16
-
+from PIL import Image
 
 from ops import *
 
@@ -412,7 +412,7 @@ class pix2pix(object):
             outImage = self.sess.run([self.fake_B],
                                            feed_dict={ self.iter_handle: handle })
 
-            synth[i,:,:,:] = deprocess(outImage[0][:,:,:])
+            synth[i,:,:,:] = deprocess(outImage[0])
 
         # segmentation = cv2.cvtColor(images[0][0,:,:,:],cv2.COLOR_RGB2BGR)
         # rgb_input = targets[0][0,:,:,:]
